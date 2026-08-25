@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"regexp"
@@ -31,7 +32,7 @@ func TestNewRecord(t *testing.T) {
 
 	m := core.NewRecord(collection)
 
-	rawData, err := json.Marshal(m.FieldsData()) // should be initialized with the defaults
+	rawData, err := json.Marshal(m.FieldsData(), json.Deterministic(true)) // should be initialized with the defaults
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +521,7 @@ func TestRecordMergeExpand(t *testing.T) {
 
 	result := m.Expand()
 
-	raw, err := json.Marshal(result)
+	raw, err := json.Marshal(result, json.Deterministic(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +567,7 @@ func TestRecordMergeExpandNilCheck(t *testing.T) {
 			m := core.NewRecord(collection)
 			m.MergeExpand(s.expand)
 
-			raw, err := json.Marshal(m)
+			raw, err := json.Marshal(m, json.Deterministic(true))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -663,7 +664,7 @@ func TestRecordFieldsData(t *testing.T) {
 	m.Set("field2", 456)
 	m.Set("unknown", 789)
 
-	raw, err := json.Marshal(m.FieldsData())
+	raw, err := json.Marshal(m.FieldsData(), json.Deterministic(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -691,7 +692,7 @@ func TestRecordCustomData(t *testing.T) {
 	m.Set("field2", 456)
 	m.Set("unknown", 789)
 
-	raw, err := json.Marshal(m.CustomData())
+	raw, err := json.Marshal(m.CustomData(), json.Deterministic(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -892,6 +893,43 @@ func TestRecordGetInt(t *testing.T) {
 			record.Set("test", s.value)
 
 			result := record.GetInt("test")
+			if result != s.expected {
+				t.Fatalf("Expected %v, got %v", s.expected, result)
+			}
+		})
+	}
+}
+
+func TestRecordGetInt64(t *testing.T) {
+	t.Parallel()
+
+	scenarios := []struct {
+		value    any
+		expected int64
+	}{
+		{nil, 0},
+		{"", 0},
+		{[]string{"true"}, 0},
+		{map[string]int{"test": 1}, 0},
+		{time.Now(), 0},
+		{"test", 0},
+		{123, 123},
+		{2.4, 2},
+		{1<<63 - 1, 1<<63 - 1},
+		{"123", 123},
+		{"123.5", 123},
+		{false, 0},
+		{true, 1},
+	}
+
+	collection := core.NewBaseCollection("test")
+	record := core.NewRecord(collection)
+
+	for i, s := range scenarios {
+		t.Run(fmt.Sprintf("%d_%#v", i, s.value), func(t *testing.T) {
+			record.Set("test", s.value)
+
+			result := record.GetInt64("test")
 			if result != s.expected {
 				t.Fatalf("Expected %v, got %v", s.expected, result)
 			}
@@ -1103,14 +1141,16 @@ func TestRecordGetUnsavedFiles(t *testing.T) {
 		t.Run(fmt.Sprintf("%d_%#v", i, s.key), func(t *testing.T) {
 			v := record.GetUnsavedFiles(s.key)
 
-			raw, err := json.Marshal(v)
+			raw, err := json.Marshal(v,
+				json.Deterministic(true),
+				json.FormatNilSliceAsNull(true),
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			rawStr := string(raw)
 
-			if rawStr != s.expected {
-				t.Fatalf("Expected\n%s\ngot\n%s", s.expected, rawStr)
+			if str := string(raw); str != s.expected {
+				t.Fatalf("Expected\n%s\ngot\n%s", s.expected, str)
 			}
 		})
 	}
@@ -1164,7 +1204,7 @@ func TestRecordUnmarshalJSONField(t *testing.T) {
 				t.Fatalf("Expected hasErr %v, got %v", s.expectError, hasErr)
 			}
 
-			raw, _ := json.Marshal(s.destination)
+			raw, _ := json.Marshal(s.destination, json.Deterministic(true))
 			if v := string(raw); v != s.expectedJSON {
 				t.Fatalf("Expected %q, got %q", s.expectedJSON, v)
 			}
@@ -1271,7 +1311,7 @@ func TestRecordDBExport(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			raw, err := json.Marshal(result)
+			raw, err := json.Marshal(result, json.Deterministic(true))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1399,7 +1439,7 @@ func TestRecordPublicExportAndMarshalJSON(t *testing.T) {
 			false,
 			nil,
 			nil,
-			`{"collectionId":"_pbc_base_123","collectionName":"test_base","expand":{"test":123},"field1":"field_1","field2":"field_2.png","field3":["test1","test2"],"id":"test_id"}`,
+			`{"collectionId":"_pbc_base_123","collectionName":"test_base","expand":{"test":123},"field1":"field_1�","field2":"field_2.png","field3":["test1","test2"],"id":"test_id"}`,
 		},
 		{
 			"[base] with email visibility",
@@ -1408,7 +1448,7 @@ func TestRecordPublicExportAndMarshalJSON(t *testing.T) {
 			false,
 			nil,
 			nil,
-			`{"collectionId":"_pbc_base_123","collectionName":"test_base","expand":{"test":123},"field1":"field_1","field2":"field_2.png","field3":["test1","test2"],"id":"test_id"}`,
+			`{"collectionId":"_pbc_base_123","collectionName":"test_base","expand":{"test":123},"field1":"field_1�","field2":"field_2.png","field3":["test1","test2"],"id":"test_id"}`,
 		},
 		{
 			"[base] with custom data",
@@ -1417,7 +1457,7 @@ func TestRecordPublicExportAndMarshalJSON(t *testing.T) {
 			true,
 			nil,
 			nil,
-			`{"collectionId":"_pbc_base_123","collectionName":"test_base","email":"test_email","emailVisibility":"test_invalid","expand":{"test":123},"field1":"field_1","field2":"field_2.png","field3":["test1","test2"],"id":"test_id","password":"test_passwordHash","tokenKey":"test_tokenKey","unknown":"test_unknown","verified":true}`,
+			`{"collectionId":"_pbc_base_123","collectionName":"test_base","email":"test_email","emailVisibility":"test_invalid","expand":{"test":123},"field1":"field_1�","field2":"field_2.png","field3":["test1","test2"],"id":"test_id","password":"test_passwordHash","tokenKey":"test_tokenKey","unknown":"test_unknown","verified":true}`,
 		},
 		{
 			"[base] with explicit hide and unhide fields",
@@ -1435,7 +1475,7 @@ func TestRecordPublicExportAndMarshalJSON(t *testing.T) {
 			true,
 			nil,
 			[]string{"field5", "@pbInternalAbc", "email", "tokenKey", "unknown"},
-			`{"collectionId":"_pbc_base_123","collectionName":"test_base","email":"test_email","emailVisibility":"test_invalid","expand":{"test":123},"field1":"field_1","field2":"field_2.png","field3":["test1","test2"],"field5":"field_5","id":"test_id","password":"test_passwordHash","tokenKey":"test_tokenKey","unknown":"test_unknown","verified":true}`,
+			`{"collectionId":"_pbc_base_123","collectionName":"test_base","email":"test_email","emailVisibility":"test_invalid","expand":{"test":123},"field1":"field_1�","field2":"field_2.png","field3":["test1","test2"],"field5":"field_5","id":"test_id","password":"test_passwordHash","tokenKey":"test_tokenKey","unknown":"test_unknown","verified":true}`,
 		},
 
 		// auth
@@ -1446,7 +1486,7 @@ func TestRecordPublicExportAndMarshalJSON(t *testing.T) {
 			false,
 			nil,
 			nil,
-			`{"collectionId":"_pbc_auth_123","collectionName":"test_auth","emailVisibility":false,"expand":{"test":123},"field1":"field_1","field2":"field_2.png","field3":["test1","test2"],"id":"test_id","verified":true}`,
+			`{"collectionId":"_pbc_auth_123","collectionName":"test_auth","emailVisibility":false,"expand":{"test":123},"field1":"field_1�","field2":"field_2.png","field3":["test1","test2"],"id":"test_id","verified":true}`,
 		},
 		{
 			"[auth] with email visibility",
@@ -1455,7 +1495,7 @@ func TestRecordPublicExportAndMarshalJSON(t *testing.T) {
 			false,
 			nil,
 			nil,
-			`{"collectionId":"_pbc_auth_123","collectionName":"test_auth","email":"test_email","emailVisibility":false,"expand":{"test":123},"field1":"field_1","field2":"field_2.png","field3":["test1","test2"],"id":"test_id","verified":true}`,
+			`{"collectionId":"_pbc_auth_123","collectionName":"test_auth","email":"test_email","emailVisibility":false,"expand":{"test":123},"field1":"field_1�","field2":"field_2.png","field3":["test1","test2"],"id":"test_id","verified":true}`,
 		},
 		{
 			"[auth] with custom data",
@@ -1464,7 +1504,7 @@ func TestRecordPublicExportAndMarshalJSON(t *testing.T) {
 			true,
 			nil,
 			nil,
-			`{"collectionId":"_pbc_auth_123","collectionName":"test_auth","emailVisibility":false,"expand":{"test":123},"field1":"field_1","field2":"field_2.png","field3":["test1","test2"],"id":"test_id","unknown":"test_unknown","verified":true}`,
+			`{"collectionId":"_pbc_auth_123","collectionName":"test_auth","emailVisibility":false,"expand":{"test":123},"field1":"field_1�","field2":"field_2.png","field3":["test1","test2"],"id":"test_id","unknown":"test_unknown","verified":true}`,
 		},
 		{
 			"[auth] with explicit hide and unhide fields",
@@ -1482,13 +1522,13 @@ func TestRecordPublicExportAndMarshalJSON(t *testing.T) {
 			true,
 			nil,
 			[]string{"field5", "@pbInternalAbc", "tokenKey", "unknown", "email"}, // emailVisibility:false has higher priority
-			`{"collectionId":"_pbc_auth_123","collectionName":"test_auth","emailVisibility":false,"expand":{"test":123},"field1":"field_1","field2":"field_2.png","field3":["test1","test2"],"field5":"field_5","id":"test_id","unknown":"test_unknown","verified":true}`,
+			`{"collectionId":"_pbc_auth_123","collectionName":"test_auth","emailVisibility":false,"expand":{"test":123},"field1":"field_1�","field2":"field_2.png","field3":["test1","test2"],"field5":"field_5","id":"test_id","unknown":"test_unknown","verified":true}`,
 		},
 	}
 
 	data := map[string]any{
 		"id":              "test_id",
-		"field1":          "field_1",
+		"field1":          "field_1\xc3", /* invalid utf8 suffix to test mangling */
 		"field2":          "field_2.png",
 		"field3":          []string{"test1", "test2"},
 		"field4":          "field_4",
@@ -1515,7 +1555,11 @@ func TestRecordPublicExportAndMarshalJSON(t *testing.T) {
 			m.Unhide(s.unhideFields...)
 			m.Hide(s.hideFields...)
 
-			exportResult, err := json.Marshal(m.PublicExport())
+			exportResult, err := json.Marshal(
+				m.PublicExport(),
+				json.Deterministic(true),
+				jsontext.AllowInvalidUTF8(true),
+			)
 			if err != nil {
 				t.Fatal(err)
 			}

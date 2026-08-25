@@ -3,7 +3,8 @@ package core
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -12,8 +13,8 @@ import (
 	"sort"
 	"strings"
 
-	validation "github.com/go-ozzo/ozzo-validation/v4"
 	"github.com/pocketbase/dbx"
+	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/pocketbase/pocketbase/core/validators"
 	"github.com/pocketbase/pocketbase/tools/dbutils"
 	"github.com/pocketbase/pocketbase/tools/filesystem"
@@ -959,6 +960,11 @@ func (m *Record) GetInt(key string) int {
 	return cast.ToInt(m.Get(key))
 }
 
+// GetInt64 returns the data value for "key" as an int64.
+func (m *Record) GetInt64(key string) int64 {
+	return cast.ToInt64(m.Get(key))
+}
+
 // GetFloat returns the data value for "key" as a float64.
 func (m *Record) GetFloat(key string) float64 {
 	return cast.ToFloat64(m.Get(key))
@@ -983,7 +989,7 @@ func (m *Record) GetStringSlice(key string) []string {
 }
 
 // GetUnsavedFiles returns the uploaded files for the provided "file" field key,
-// (aka. the current [*filesytem.File] values) so that you can apply further
+// (aka. the current [*filesystem.File] values) so that you can apply further
 // validations or modifications (including changing the file name or content before persisting).
 //
 // Example:
@@ -1218,12 +1224,12 @@ func areValuesEqual(a any, b any) bool {
 		bv, ok := b.(types.JSONRaw)
 		return ok && bytes.Equal(av, bv)
 	default:
-		aRaw, err := json.Marshal(a)
+		aRaw, err := json.Marshal(a, json.Deterministic(true))
 		if err != nil {
 			return false
 		}
 
-		bRaw, err := json.Marshal(b)
+		bRaw, err := json.Marshal(b, json.Deterministic(true))
 		if err != nil {
 			return false
 		}
@@ -1324,7 +1330,12 @@ func (record *Record) PublicExport() map[string]any {
 //
 // Only the data exported by `PublicExport()` will be serialized.
 func (m Record) MarshalJSON() ([]byte, error) {
-	return json.Marshal(m.PublicExport())
+	return json.Marshal(
+		m.PublicExport(),
+		json.Deterministic(true),
+		// to preserve the old jsonv1 behavior in case of invalid data
+		jsontext.AllowInvalidUTF8(true),
+	)
 }
 
 // UnmarshalJSON implements the [json.Unmarshaler] interface.
@@ -1428,13 +1439,13 @@ func onRecordValidate(e *RecordEvent) error {
 
 func onRecordSaveExecute(e *RecordEvent) error {
 	if e.Record.Collection().IsAuth() {
-		// ensure that the token key is regenerated on password change or email change
 		if !e.Record.IsNew() {
 			lastSavedRecord, err := e.App.FindRecordById(e.Record.Collection(), e.Record.Id)
 			if err != nil {
 				return err
 			}
 
+			// ensure that the token key is regenerated on password change or email change
 			if lastSavedRecord.TokenKey() == e.Record.TokenKey() &&
 				(lastSavedRecord.Get(FieldNamePassword) != e.Record.Get(FieldNamePassword) ||
 					lastSavedRecord.Email() != e.Record.Email()) {
@@ -1442,7 +1453,8 @@ func onRecordSaveExecute(e *RecordEvent) error {
 			}
 		}
 
-		// cross-check that the auth record id is unique across all auth collections.
+		// loosely cross-check that the auth record id is unique across all auth collections
+		// to minimize impact of mistakes in API rules when multiple auth collections are used
 		authCollections, err := e.App.FindAllCollections(CollectionTypeAuth)
 		if err != nil {
 			return fmt.Errorf("unable to fetch the auth collections for cross-id unique check: %w", err)

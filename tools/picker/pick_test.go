@@ -1,7 +1,7 @@
 package picker_test
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"testing"
 
 	"github.com/pocketbase/pocketbase/tools/picker"
@@ -62,11 +62,11 @@ func TestPickFields(t *testing.T) {
 			"slice of maps with existing and missing fields",
 			[]any{
 				map[string]any{"a": 11, "b": 11, "c": "test1"},
-				map[string]any{"a": 22, "b": 22, "c": "test2"},
+				map[string]any{"a": 22, "b": 22, "c": "\xc3" /* test invalid utf8 mangling */},
 			},
 			"a,  c  ,missing", // test individual fields trim
 			false,
-			`[{"a":11,"c":"test1"},{"a":22,"c":"test2"}]`,
+			`[{"a":11,"c":"test1"},{"a":22,"c":"�"}]`,
 		},
 		{
 			"nested fields with mixed map and any slices",
@@ -263,7 +263,7 @@ func TestPickFields(t *testing.T) {
 				return
 			}
 
-			serialized, err := json.Marshal(result)
+			serialized, err := json.Marshal(result, json.Deterministic(true))
 			if err != nil {
 				t.Fatal(err)
 			}

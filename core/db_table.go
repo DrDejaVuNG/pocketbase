@@ -144,23 +144,23 @@ func (app *BaseApp) TableIndexes(tableName string) (map[string]string, error) {
 // This method is a no-op if a table with the provided name doesn't exist.
 //
 // NB! Be aware that this method is vulnerable to SQL injection and the
-// "tableName" argument must come only from trusted input!
-func (app *BaseApp) DeleteTable(tableName string) error {
+// "dangerousTableName" argument must come only from trusted input!
+func (app *BaseApp) DeleteTable(dangerousTableName string) error {
 	/* SQLite:
 	_, err := app.NonconcurrentDB().NewQuery(fmt.Sprintf(
 		"DROP TABLE IF EXISTS {{%s}}",
-		tableName,
+		dangerousTableName,
 	)).Execute()
 	*/
 	// PostgreSQL:
 	// Note: We use "CASCADE" to drop all dependent objects (e.g. views, etc.) in PostgreSQL.
-	if strings.TrimSpace(tableName) == "" {
+	if strings.TrimSpace(dangerousTableName) == "" {
 		// Adding this check to prevent the keyword `CASCADE` being considered as a table name by PostgreSQL.
 		return fmt.Errorf("invalid table name")
 	}
 	_, err := app.ConcurrentDB().NewQuery(fmt.Sprintf(
 		"DROP TABLE IF EXISTS {{%s}} CASCADE",
-		tableName,
+		dangerousTableName,
 	)).Execute()
 
 	return err

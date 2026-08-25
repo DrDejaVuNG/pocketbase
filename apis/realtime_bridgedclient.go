@@ -163,11 +163,11 @@ func (r *BridgedClient) BroadcastChanges() {
 			)
 		);
 	`, authSQL)).Bind(authParams).Bind(dbx.Params{
-		"clientId":             r.subscription.ClientId,
-		"channelId":            r.subscription.ChannelId,
-		"subscriptions":         r.subscription.Subscriptions,
-		"authCollectionRef":   r.subscription.AuthCollectionRef,
-		"authRecordRef":       r.subscription.AuthRecordRef,
+		"clientId":           r.subscription.ClientId,
+		"channelId":          r.subscription.ChannelId,
+		"subscriptions":      r.subscription.Subscriptions,
+		"authCollectionRef":  r.subscription.AuthCollectionRef,
+		"authRecordRef":      r.subscription.AuthRecordRef,
 		"updatedByChannelId": r.subscription.UpdatedByChannelId,
 	}).Execute()
 	if err != nil {

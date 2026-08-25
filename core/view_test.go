@@ -1,7 +1,7 @@
 package core_test
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"slices"
 	"testing"
@@ -251,6 +251,12 @@ func TestCreateViewFields(t *testing.T) {
 			nil,
 		},
 		{
+			"wrapped query with wildcard column",
+			"select * from (select 1 as id)",
+			true,
+			nil,
+		},
+		{
 			"query without id",
 			"select text, url, created, updated from demo1",
 			true,
@@ -365,7 +371,7 @@ func TestCreateViewFields(t *testing.T) {
 			},
 		},
 		{
-			"query with multiple froms, joins and style of aliasses",
+			"query with multiple froms, joins and style of aliases",
 			/* SQLite:
 			`
 				select
@@ -662,7 +668,7 @@ func TestCreateViewFields(t *testing.T) {
 			}
 
 			if len(s.expectFields) != len(result) {
-				serialized, _ := json.Marshal(result)
+				serialized, _ := json.Marshal(result, json.Deterministic(true))
 				t.Fatalf("Expected %d fields, got %d: \n%s", len(s.expectFields), len(result), serialized)
 			}
 
@@ -681,6 +687,61 @@ func TestCreateViewFields(t *testing.T) {
 	}
 
 	ensureNoTempViews(app, t)
+}
+
+func TestCreateViewFieldsWithNumberOnlyInt(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	sql := `select
+		a.id,
+		count(a.id) count,
+		total(a.id) total,
+		cast(a.id as int) cast_int,
+		cast(a.id as integer) cast_integer,
+		cast(a.id as real) cast_real,
+		cast(a.id as decimal) cast_decimal,
+		cast(a.id as numeric) cast_numeric
+	from demo1 a`
+
+	result, err := app.CreateViewFields(sql)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	onlyInts := map[string]bool{
+		"count":        true,
+		"total":        false,
+		"cast_int":     true,
+		"cast_integer": true,
+		"cast_real":    false,
+		"cast_decimal": false,
+		"cast_numeric": false,
+	}
+
+	totalExpected := len(onlyInts) + 1
+	if total := len(result); total != totalExpected {
+		t.Fatalf("Expected %d, got %d", totalExpected, total)
+	}
+
+	for _, f := range result {
+		if f.GetName() == "id" {
+			continue
+		}
+
+		t.Run(f.GetName(), func(t *testing.T) {
+			nf, ok := f.(*core.NumberField)
+			if !ok {
+				t.Fatalf("Expected *core.NumberField, got %v", f)
+			}
+
+			if nf.OnlyInt != onlyInts[nf.Name] {
+				t.Fatalf("Expected OnlyInt %v, got %v", onlyInts[nf.Name], nf.OnlyInt)
+			}
+		})
+	}
 }
 
 func TestFindRecordByViewFile(t *testing.T) {
@@ -814,4 +875,130 @@ func TestFindRecordByViewFile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDryRunView(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	scenarios := []struct {
+		name            string
+		query           string
+		sampleSize      int
+		expectError     bool
+		expectFields    map[string]string // name-type pairs
+		expectSampleIds []string          // record ids of the resulting sample
+	}{
+		{
+			"empty query",
+			"",
+			10,
+			true,
+			nil,
+			nil,
+		},
+		{
+			"non-select query",
+			"CREATE TABLE t1(x INT)",
+			10,
+			true,
+			nil,
+			nil,
+		},
+		{
+			"multiple inline select statements",
+			"select 'a' as id; select 'b' as id",
+			10,
+			true,
+			nil,
+			nil,
+		},
+		{
+			"select with invalid formatted field name",
+			"select 'a' as id, count(*)", // missing field alias
+			10,
+			true,
+			nil,
+			nil,
+		},
+		{
+			"select resolving to records with missing id",
+			"select id from (select 'a' as id UNION ALL select null as id UNION ALL select 'c' as id)",
+			10,
+			true,
+			nil,
+			nil,
+		},
+		{
+			"select resolving to records with duplicated ids",
+			"select id from (select 'a' as id UNION ALL select 'a' as id UNION ALL select 'c' as id)",
+			10,
+			true,
+			nil,
+			nil,
+		},
+		{
+			"no sample size and valid select query but with invalid records result",
+			"select id from (select 'a' as id UNION ALL select 'a' as id UNION ALL select 'c' as id)",
+			0,
+			false, // still "valid" because there is no sample to check
+			map[string]string{"id": "text"},
+			nil,
+		},
+		{
+			"sample size < total select records",
+			"select id from (select 'a' as id UNION ALL select 'b' as id UNION ALL select 'c' as id UNION ALL select 'd' as id)",
+			3,
+			false,
+			map[string]string{"id": "text"},
+			[]string{"a", "b", "c"},
+		},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			result, err := app.DryRunView(s.query, s.sampleSize)
+
+			hasErr := err != nil
+			if hasErr != s.expectError {
+				t.Fatalf("Expected hasErr %v, got %v (%v)", s.expectError, hasErr, err)
+			}
+
+			if hasErr {
+				return
+			}
+
+			// check fields
+			// ---
+			if len(s.expectFields) != len(result.Fields) {
+				serialized, _ := json.Marshal(result.Fields, json.Deterministic(true))
+				t.Fatalf("Expected %d fields, got %d: \n%s", len(s.expectFields), len(result.Fields), serialized)
+			}
+			for name, typ := range s.expectFields {
+				field := result.Fields.GetByName(name)
+				if field == nil {
+					t.Fatalf("Expected to find field %s, got nil", name)
+				}
+
+				if field.Type() != typ {
+					t.Fatalf("Expected field %s to be %q, got %q", name, typ, field.Type())
+				}
+			}
+
+			// check sample ids
+			// ---
+			if len(s.expectSampleIds) != len(result.Sample) {
+				t.Fatalf("Expected %d sample records, got %d", len(s.expectSampleIds), len(result.Sample))
+			}
+			for i, r := range result.Sample {
+				if s.expectSampleIds[i] != r.Id {
+					t.Fatalf("Expected sample record id %q, got %q at %d", s.expectSampleIds[i], r.Id, i)
+				}
+			}
+		})
+	}
+
+	ensureNoTempViews(app, t)
 }

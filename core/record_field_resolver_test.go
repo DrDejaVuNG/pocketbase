@@ -1,7 +1,7 @@
 package core_test
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"regexp"
 	"slices"
 	"strings"
@@ -127,7 +127,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 		expectQuery        string
 	}{
 		{
-			"non relation field (with all default operators)",
+			"none relation field (with all default operators)",
 			"demo4",
 			"title = true || title != 'test' || title ~ 'test1' || title !~ '%test2' || title > 1 || title >= 2 || title < 3 || title <= 4",
 			false,
@@ -138,7 +138,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 			`SELECT "demo4".* FROM "demo4" WHERE ([[demo4.title]] = TRUE OR [[demo4.title]] IS DISTINCT FROM {:TEST} OR [[demo4.title]]::text LIKE {:TEST} ESCAPE '\' OR [[demo4.title]]::text NOT LIKE {:TEST} ESCAPE '\' OR [[demo4.title]] > 1 OR [[demo4.title]] >= 2 OR [[demo4.title]] < 3 OR [[demo4.title]] <= 4)`,
 		},
 		{
-			"non relation field (with all opt/any operators)",
+			"none relation field (with all opt/any operators)",
 			"demo4",
 			"title ?= true || title ?!= 'test' || title ?~ 'test1' || title ?!~ '%test2' || title ?> 1 || title ?>= 2 || title ?< 3 || title ?<= 4",
 			false,
@@ -197,11 +197,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 			"demo4",
 			"rel_one_cascade.created > true",
 			false,
-			/* SQLite:
-			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo3` `demo4_rel_one_cascade` ON [[demo4_rel_one_cascade.id]] = [[demo4.rel_one_cascade]] WHERE (({:TEST} IS NOT '' AND {:TEST} IS NOT {:TEST})) AND ([[demo4_rel_one_cascade.created]] > 1)",
-			*/
-			// PostgreSQL:
-			`SELECT DISTINCT "demo4".* FROM "demo4" LEFT JOIN "demo3" "demo4_rel_one_cascade" ON [[demo4_rel_one_cascade.id]] = [[demo4.rel_one_cascade]] WHERE (({:TEST} IS DISTINCT FROM '' AND {:TEST} IS DISTINCT FROM {:TEST})) AND ([[demo4_rel_one_cascade.created]] > TRUE)`,
+			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo3` `demo4_rel_one_cascade` ON [[demo4_rel_one_cascade.id]] = [[demo4.rel_one_cascade]] WHERE ((([[demo4_rel_one_cascade.id]] = '' OR [[demo4_rel_one_cascade.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST}))) AND ([[demo4_rel_one_cascade.created]] > 1)",
 		},
 		{
 			"rel to collection with non-empty list rule (with allowHiddenFields)",
@@ -248,22 +244,14 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 			"demo4",
 			"self_rel_one.rel_one_cascade.created > true",
 			false,
-			/* SQLite:
-			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo4` `demo4_self_rel_one` ON [[demo4_self_rel_one.id]] = [[demo4.self_rel_one]] LEFT JOIN `demo3` `demo4_self_rel_one_rel_one_cascade` ON [[demo4_self_rel_one_rel_one_cascade.id]] = [[demo4_self_rel_one.rel_one_cascade]] WHERE (({:TEST} IS NOT '' AND {:TEST} IS NOT {:TEST})) AND ([[demo4_self_rel_one_rel_one_cascade.created]] > 1)",
-			*/
-			// PostgreSQL:
-			`SELECT DISTINCT "demo4".* FROM "demo4" LEFT JOIN "demo4" "demo4_self_rel_one" ON [[demo4_self_rel_one.id]] = [[demo4.self_rel_one]] LEFT JOIN "demo3" "demo4_self_rel_one_rel_one_cascade" ON [[demo4_self_rel_one_rel_one_cascade.id]] = [[demo4_self_rel_one.rel_one_cascade]] WHERE (({:TEST} IS DISTINCT FROM '' AND {:TEST} IS DISTINCT FROM {:TEST})) AND ([[demo4_self_rel_one_rel_one_cascade.created]] > TRUE)`,
+			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo4` `demo4_self_rel_one` ON [[demo4_self_rel_one.id]] = [[demo4.self_rel_one]] LEFT JOIN `demo3` `demo4_self_rel_one_rel_one_cascade` ON [[demo4_self_rel_one_rel_one_cascade.id]] = [[demo4_self_rel_one.rel_one_cascade]] WHERE ((([[demo4_self_rel_one_rel_one_cascade.id]] = '' OR [[demo4_self_rel_one_rel_one_cascade.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST}))) AND ([[demo4_self_rel_one_rel_one_cascade.created]] > 1)",
 		},
 		{
 			"nested rels with non-empty list rule (joins reuse test)",
 			"demo4",
 			"self_rel_one.rel_one_cascade.created > true && self_rel_one.rel_one_cascade.updated > true",
 			false,
-			/* SQLite:
-			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo4` `demo4_self_rel_one` ON [[demo4_self_rel_one.id]] = [[demo4.self_rel_one]] LEFT JOIN `demo3` `demo4_self_rel_one_rel_one_cascade` ON [[demo4_self_rel_one_rel_one_cascade.id]] = [[demo4_self_rel_one.rel_one_cascade]] WHERE (({:TEST} IS NOT '' AND {:TEST} IS NOT {:TEST})) AND (([[demo4_self_rel_one_rel_one_cascade.created]] > 1 AND [[demo4_self_rel_one_rel_one_cascade.updated]] > 1))",
-			*/
-			// PostgreSQL:
-			`SELECT DISTINCT "demo4".* FROM "demo4" LEFT JOIN "demo4" "demo4_self_rel_one" ON [[demo4_self_rel_one.id]] = [[demo4.self_rel_one]] LEFT JOIN "demo3" "demo4_self_rel_one_rel_one_cascade" ON [[demo4_self_rel_one_rel_one_cascade.id]] = [[demo4_self_rel_one.rel_one_cascade]] WHERE (({:TEST} IS DISTINCT FROM '' AND {:TEST} IS DISTINCT FROM {:TEST})) AND (([[demo4_self_rel_one_rel_one_cascade.created]] > TRUE AND [[demo4_self_rel_one_rel_one_cascade.updated]] > TRUE))`,
+			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo4` `demo4_self_rel_one` ON [[demo4_self_rel_one.id]] = [[demo4.self_rel_one]] LEFT JOIN `demo3` `demo4_self_rel_one_rel_one_cascade` ON [[demo4_self_rel_one_rel_one_cascade.id]] = [[demo4_self_rel_one.rel_one_cascade]] WHERE ((([[demo4_self_rel_one_rel_one_cascade.id]] = '' OR [[demo4_self_rel_one_rel_one_cascade.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST}))) AND (([[demo4_self_rel_one_rel_one_cascade.created]] > 1 AND [[demo4_self_rel_one_rel_one_cascade.updated]] > 1))",
 		},
 		{
 			"nested rels with non-empty list rule (with allowHiddenFields)",
@@ -379,11 +367,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 			"demo3",
 			"demo4_via_rel_one_cascade.id = true",
 			false,
-			/* SQLite:
-			"SELECT DISTINCT `demo3`.* FROM `demo3` LEFT JOIN `demo4` `demo3_demo4_via_rel_one_cascade` ON [[demo3.id]] IN (SELECT [[__je_demo3_demo4_via_rel_one_cascade.value]] FROM json_each(CASE WHEN iif(json_valid([[demo3_demo4_via_rel_one_cascade.rel_one_cascade]]), json_type([[demo3_demo4_via_rel_one_cascade.rel_one_cascade]])='array', FALSE) THEN [[demo3_demo4_via_rel_one_cascade.rel_one_cascade]] ELSE json_array([[demo3_demo4_via_rel_one_cascade.rel_one_cascade]]) END) {{__je_demo3_demo4_via_rel_one_cascade}}) WHERE ((([[demo3_demo4_via_rel_one_cascade.id]] = 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm_demo3_demo4_via_rel_one_cascade.id]] as [[multiMatchValue]] FROM `demo3` `__mm_demo3` LEFT JOIN `demo4` `__mm_demo3_demo4_via_rel_one_cascade` ON [[__mm_demo3.id]] IN (SELECT [[__je___mm_demo3_demo4_via_rel_one_cascade.value]] FROM json_each(CASE WHEN iif(json_valid([[__mm_demo3_demo4_via_rel_one_cascade.rel_one_cascade]]), json_type([[__mm_demo3_demo4_via_rel_one_cascade.rel_one_cascade]])='array', FALSE) THEN [[__mm_demo3_demo4_via_rel_one_cascade.rel_one_cascade]] ELSE json_array([[__mm_demo3_demo4_via_rel_one_cascade.rel_one_cascade]]) END) {{__je___mm_demo3_demo4_via_rel_one_cascade}}) WHERE `__mm_demo3`.`id` = `demo3`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] = 1)))))",
-			*/
-			// PostgreSQL:
-			`SELECT DISTINCT "demo3".* FROM "demo3" LEFT JOIN "demo4" "demo3_demo4_via_rel_one_cascade" ON [[demo3.id]] IN (SELECT [[__je_demo3_demo4_via_rel_one_cascade.value]] FROM jsonb_array_elements_text(CASE WHEN ([[demo3_demo4_via_rel_one_cascade.rel_one_cascade]] IS JSON OR json_valid([[demo3_demo4_via_rel_one_cascade.rel_one_cascade]]::text)) AND jsonb_typeof([[demo3_demo4_via_rel_one_cascade.rel_one_cascade]]::jsonb) = 'array' THEN [[demo3_demo4_via_rel_one_cascade.rel_one_cascade]]::jsonb ELSE jsonb_build_array([[demo3_demo4_via_rel_one_cascade.rel_one_cascade]]) END) {{__je_demo3_demo4_via_rel_one_cascade}}) WHERE ((([[demo3_demo4_via_rel_one_cascade.id]] = TRUE) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm_demo3_demo4_via_rel_one_cascade.id]] as [[multiMatchValue]] FROM "demo3" "__mm_demo3" LEFT JOIN "demo4" "__mm_demo3_demo4_via_rel_one_cascade" ON [[__mm_demo3.id]] IN (SELECT [[__je___mm_demo3_demo4_via_rel_one_cascade.value]] FROM jsonb_array_elements_text(CASE WHEN ([[__mm_demo3_demo4_via_rel_one_cascade.rel_one_cascade]] IS JSON OR json_valid([[__mm_demo3_demo4_via_rel_one_cascade.rel_one_cascade]]::text)) AND jsonb_typeof([[__mm_demo3_demo4_via_rel_one_cascade.rel_one_cascade]]::jsonb) = 'array' THEN [[__mm_demo3_demo4_via_rel_one_cascade.rel_one_cascade]]::jsonb ELSE jsonb_build_array([[__mm_demo3_demo4_via_rel_one_cascade.rel_one_cascade]]) END) {{__je___mm_demo3_demo4_via_rel_one_cascade}}) WHERE "__mm_demo3"."id" = "demo3"."id") {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] = TRUE)))))`,
+			"SELECT DISTINCT `demo3`.* FROM `demo3` LEFT JOIN `demo4` `demo3_demo4_via_rel_one_cascade` ON [[demo3_demo4_via_rel_one_cascade.rel_one_cascade]] = [[demo3.id]] WHERE ((([[demo3_demo4_via_rel_one_cascade.id]] = 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm_demo3_demo4_via_rel_one_cascade.id]] as [[multiMatchValue]] FROM `demo3` `__mm_demo3` LEFT JOIN `demo4` `__mm_demo3_demo4_via_rel_one_cascade` ON [[__mm_demo3_demo4_via_rel_one_cascade.rel_one_cascade]] = [[__mm_demo3.id]] WHERE `__mm_demo3`.`id` = `demo3`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] = 1)))))",
 		},
 		{
 			"back relations via single relation field (with unique index)",
@@ -440,22 +424,14 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 			"demo1",
 			"view1_via_rel_one.rel_many.created ?> true",
 			true,
-			/* SQLite:
-			"SELECT DISTINCT `demo1`.* FROM `demo1` LEFT JOIN `view1` `demo1_view1_via_rel_one` ON [[demo1.id]] IN (SELECT [[__je_demo1_view1_via_rel_one.value]] FROM json_each(CASE WHEN iif(json_valid([[demo1_view1_via_rel_one.rel_one]]), json_type([[demo1_view1_via_rel_one.rel_one]])='array', FALSE) THEN [[demo1_view1_via_rel_one.rel_one]] ELSE json_array([[demo1_view1_via_rel_one.rel_one]]) END) {{__je_demo1_view1_via_rel_one}}) LEFT JOIN json_each(CASE WHEN iif(json_valid([[demo1_view1_via_rel_one.rel_many]]), json_type([[demo1_view1_via_rel_one.rel_many]])='array', FALSE) THEN [[demo1_view1_via_rel_one.rel_many]] ELSE json_array([[demo1_view1_via_rel_one.rel_many]]) END) `__je_demo1_view1_via_rel_one_rel_many` LEFT JOIN `users` `demo1_view1_via_rel_one_rel_many` ON [[demo1_view1_via_rel_one_rel_many.id]] = [[__je_demo1_view1_via_rel_one_rel_many.value]] WHERE [[demo1_view1_via_rel_one_rel_many.created]] > 1",
-			*/
-			// PostgreSQL:
-			`SELECT DISTINCT "demo1".* FROM "demo1" LEFT JOIN "view1" "demo1_view1_via_rel_one" ON [[demo1.id]] IN (SELECT [[__je_demo1_view1_via_rel_one.value]] FROM jsonb_array_elements_text(CASE WHEN ([[demo1_view1_via_rel_one.rel_one]] IS JSON OR json_valid([[demo1_view1_via_rel_one.rel_one]]::text)) AND jsonb_typeof([[demo1_view1_via_rel_one.rel_one]]::jsonb) = 'array' THEN [[demo1_view1_via_rel_one.rel_one]]::jsonb ELSE jsonb_build_array([[demo1_view1_via_rel_one.rel_one]]) END) {{__je_demo1_view1_via_rel_one}}) LEFT JOIN jsonb_array_elements_text(CASE WHEN ([[demo1_view1_via_rel_one.rel_many]] IS JSON OR json_valid([[demo1_view1_via_rel_one.rel_many]]::text)) AND jsonb_typeof([[demo1_view1_via_rel_one.rel_many]]::jsonb) = 'array' THEN [[demo1_view1_via_rel_one.rel_many]]::jsonb ELSE jsonb_build_array([[demo1_view1_via_rel_one.rel_many]]) END) "__je_demo1_view1_via_rel_one_rel_many" ON 1=1 LEFT JOIN "users" "demo1_view1_via_rel_one_rel_many" ON [[demo1_view1_via_rel_one_rel_many.id]] = [[__je_demo1_view1_via_rel_one_rel_many.value]] WHERE [[demo1_view1_via_rel_one_rel_many.created]] > TRUE`,
+			"SELECT DISTINCT `demo1`.* FROM `demo1` LEFT JOIN `view1` `demo1_view1_via_rel_one` ON [[demo1_view1_via_rel_one.rel_one]] = [[demo1.id]] LEFT JOIN json_each(CASE WHEN iif(json_valid([[demo1_view1_via_rel_one.rel_many]]), json_type([[demo1_view1_via_rel_one.rel_many]])='array', FALSE) THEN [[demo1_view1_via_rel_one.rel_many]] ELSE json_array([[demo1_view1_via_rel_one.rel_many]]) END) `__je_demo1_view1_via_rel_one_rel_many` LEFT JOIN `users` `demo1_view1_via_rel_one_rel_many` ON [[demo1_view1_via_rel_one_rel_many.id]] = [[__je_demo1_view1_via_rel_one_rel_many.value]] WHERE [[demo1_view1_via_rel_one_rel_many.created]] > 1",
 		},
 		{
 			"recursive back relations with non-empty list rule",
 			"demo3",
 			"demo4_via_rel_many_cascade.rel_one_cascade.demo4_via_rel_many_cascade.id ?= true",
 			false,
-			/* SQLite:
-			"SELECT DISTINCT `demo3`.* FROM `demo3` LEFT JOIN `demo4` `demo3_demo4_via_rel_many_cascade` ON [[demo3.id]] IN (SELECT [[__je_demo3_demo4_via_rel_many_cascade.value]] FROM json_each(CASE WHEN iif(json_valid([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]]), json_type([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]])='array', FALSE) THEN [[demo3_demo4_via_rel_many_cascade.rel_many_cascade]] ELSE json_array([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]]) END) {{__je_demo3_demo4_via_rel_many_cascade}}) LEFT JOIN `demo3` `demo3_demo4_via_rel_many_cascade_rel_one_cascade` ON [[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] = [[demo3_demo4_via_rel_many_cascade.rel_one_cascade]] LEFT JOIN `demo4` `demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade` ON [[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] IN (SELECT [[__je_demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.value]] FROM json_each(CASE WHEN iif(json_valid([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]]), json_type([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]])='array', FALSE) THEN [[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]] ELSE json_array([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]]) END) {{__je_demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade}}) WHERE (({:TEST} IS NOT '' AND {:TEST} IS NOT {:TEST})) AND ([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.id]] = 1)",
-			*/
-			// PostgreSQL:
-			`SELECT DISTINCT "demo3".* FROM "demo3" LEFT JOIN "demo4" "demo3_demo4_via_rel_many_cascade" ON [[demo3.id]] IN (SELECT [[__je_demo3_demo4_via_rel_many_cascade.value]] FROM jsonb_array_elements_text(CASE WHEN ([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]] IS JSON OR json_valid([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]]::text)) AND jsonb_typeof([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]]::jsonb) = 'array' THEN [[demo3_demo4_via_rel_many_cascade.rel_many_cascade]]::jsonb ELSE jsonb_build_array([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]]) END) {{__je_demo3_demo4_via_rel_many_cascade}}) LEFT JOIN "demo3" "demo3_demo4_via_rel_many_cascade_rel_one_cascade" ON [[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] = [[demo3_demo4_via_rel_many_cascade.rel_one_cascade]] LEFT JOIN "demo4" "demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade" ON [[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] IN (SELECT [[__je_demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.value]] FROM jsonb_array_elements_text(CASE WHEN ([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]] IS JSON OR json_valid([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]]::text)) AND jsonb_typeof([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]]::jsonb) = 'array' THEN [[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]]::jsonb ELSE jsonb_build_array([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]]) END) {{__je_demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade}}) WHERE (({:TEST} IS DISTINCT FROM '' AND {:TEST} IS DISTINCT FROM {:TEST})) AND ([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.id]] = TRUE)`,
+			"SELECT DISTINCT `demo3`.* FROM `demo3` LEFT JOIN `demo4` `demo3_demo4_via_rel_many_cascade` ON [[demo3.id]] IN (SELECT [[__je_demo3_demo4_via_rel_many_cascade.value]] FROM json_each(CASE WHEN iif(json_valid([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]]), json_type([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]])='array', FALSE) THEN [[demo3_demo4_via_rel_many_cascade.rel_many_cascade]] ELSE json_array([[demo3_demo4_via_rel_many_cascade.rel_many_cascade]]) END) {{__je_demo3_demo4_via_rel_many_cascade}}) LEFT JOIN `demo3` `demo3_demo4_via_rel_many_cascade_rel_one_cascade` ON [[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] = [[demo3_demo4_via_rel_many_cascade.rel_one_cascade]] LEFT JOIN `demo4` `demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade` ON [[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] IN (SELECT [[__je_demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.value]] FROM json_each(CASE WHEN iif(json_valid([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]]), json_type([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]])='array', FALSE) THEN [[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]] ELSE json_array([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.rel_many_cascade]]) END) {{__je_demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade}}) WHERE ((([[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] = '' OR [[demo3_demo4_via_rel_many_cascade_rel_one_cascade.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST}))) AND ([[demo3_demo4_via_rel_many_cascade_rel_one_cascade_demo4_via_rel_many_cascade.id]] = 1)",
 		},
 		{
 			"recursive back relations with non-empty list rule (with allowHiddenFields)",
@@ -578,11 +554,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 			"demo4",
 			"@collection.demo3.title > true",
 			false,
-			/* SQLite:
-			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo3` `__collection_demo3` WHERE (({:TEST} IS NOT '' AND {:TEST} IS NOT {:TEST})) AND (((([[__collection_demo3.title]] > 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___collection_demo3.title]] as [[multiMatchValue]] FROM `demo4` `__mm_demo4` LEFT JOIN `demo3` `__mm___collection_demo3` WHERE `__mm_demo4`.`id` = `demo4`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] > 1))))))",
-			*/
-			// PostgreSQL:
-			`SELECT DISTINCT "demo4".* FROM "demo4" LEFT JOIN "demo3" "__collection_demo3" ON 1=1 WHERE (({:TEST} IS DISTINCT FROM '' AND {:TEST} IS DISTINCT FROM {:TEST})) AND (((([[__collection_demo3.title]] > TRUE) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___collection_demo3.title]] as [[multiMatchValue]] FROM "demo4" "__mm_demo4" LEFT JOIN "demo3" "__mm___collection_demo3" ON 1=1 WHERE "__mm_demo4"."id" = "demo4"."id") {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] > TRUE))))))`,
+			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo3` `__collection_demo3` WHERE ((([[__collection_demo3.id]] = '' OR [[__collection_demo3.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST}))) AND (((([[__collection_demo3.title]] > 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___collection_demo3.title]] as [[multiMatchValue]] FROM `demo4` `__mm_demo4` LEFT JOIN `demo3` `__mm___collection_demo3` WHERE `__mm_demo4`.`id` = `demo4`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] > 1))))))",
 		},
 		{
 			"collection filter in a non-empty list rule collection (with allowHiddenFields)",
@@ -667,10 +639,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 				// different collection
 				"@request.body.self_rel_many.title = true",
 			false,
-			/* SQLite:
-			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo3` `__data_demo3_rel_one_cascade` ON [[__data_demo3_rel_one_cascade.id]]={:p0} LEFT JOIN `demo3` `__data_demo3_rel_one_no_cascade` ON [[__data_demo3_rel_one_no_cascade.id]]={:p1} LEFT JOIN `demo4` `__data_demo4_self_rel_many` ON [[__data_demo4_self_rel_many.id]]={:p2} WHERE ((({:TEST} IS NOT '' AND {:TEST} IS NOT {:TEST})) AND (({:TEST} IS NOT '' AND {:TEST} IS NOT {:TEST}))) AND (([[__data_demo3_rel_one_cascade.title]] > 1 AND [[__data_demo3_rel_one_no_cascade.title]] < 1 AND (([[__data_demo4_self_rel_many.title]] = 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___data_demo4_self_rel_many.title]] as [[multiMatchValue]] FROM `demo4` `__mm_demo4` LEFT JOIN `demo4` `__mm___data_demo4_self_rel_many` ON [[__mm___data_demo4_self_rel_many.id]]={:p11} WHERE `__mm_demo4`.`id` = `demo4`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] = 1))))))",
-			*/
-			`SELECT DISTINCT "demo4".* FROM "demo4" LEFT JOIN "demo3" "__data_demo3_rel_one_cascade" ON [[__data_demo3_rel_one_cascade.id]]={:p0} LEFT JOIN "demo3" "__data_demo3_rel_one_no_cascade" ON [[__data_demo3_rel_one_no_cascade.id]]={:p1} LEFT JOIN "demo4" "__data_demo4_self_rel_many" ON [[__data_demo4_self_rel_many.id]]={:p2} WHERE ((({:TEST} IS DISTINCT FROM '' AND {:TEST} IS DISTINCT FROM {:TEST})) AND (({:TEST} IS DISTINCT FROM '' AND {:TEST} IS DISTINCT FROM {:TEST}))) AND (([[__data_demo3_rel_one_cascade.title]] > TRUE AND [[__data_demo3_rel_one_no_cascade.title]] < TRUE AND (([[__data_demo4_self_rel_many.title]] = TRUE) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___data_demo4_self_rel_many.title]] as [[multiMatchValue]] FROM "demo4" "__mm_demo4" LEFT JOIN "demo4" "__mm___data_demo4_self_rel_many" ON [[__mm___data_demo4_self_rel_many.id]]={:p9} WHERE "__mm_demo4"."id" = "demo4"."id") {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] = TRUE))))))`,
+			"SELECT DISTINCT `demo4`.* FROM `demo4` LEFT JOIN `demo3` `__data_demo3_rel_one_cascade` ON [[__data_demo3_rel_one_cascade.id]]={:p0} LEFT JOIN `demo3` `__data_demo3_rel_one_no_cascade` ON [[__data_demo3_rel_one_no_cascade.id]]={:p1} LEFT JOIN `demo4` `__data_demo4_self_rel_many` ON [[__data_demo4_self_rel_many.id]]={:p2} WHERE (((([[__data_demo3_rel_one_cascade.id]] = '' OR [[__data_demo3_rel_one_cascade.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST}))) AND ((([[__data_demo3_rel_one_no_cascade.id]] = '' OR [[__data_demo3_rel_one_no_cascade.id]] IS NULL) OR ({:fTEST} IS NOT '' AND {:fTEST} IS NOT {:tTEST})))) AND (([[__data_demo3_rel_one_cascade.title]] > 1 AND [[__data_demo3_rel_one_no_cascade.title]] < 1 AND (([[__data_demo4_self_rel_many.title]] = 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___data_demo4_self_rel_many.title]] as [[multiMatchValue]] FROM `demo4` `__mm_demo4` LEFT JOIN `demo4` `__mm___data_demo4_self_rel_many` ON [[__mm___data_demo4_self_rel_many.id]]={:p13} WHERE `__mm_demo4`.`id` = `demo4`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] = 1))))))",
 		},
 		{
 			"@request.body.arrayble:each fields",
@@ -857,6 +826,27 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 			// PostgreSQL:
 			`SELECT "view1".* FROM "view1" WHERE (([[view1.point]]::text = '' OR [[view1.point]] IS NULL) OR JSON_QUERY_OR_NULL([[view1.point]], '$.lat')::jsonb::numeric > 1 OR JSON_QUERY_OR_NULL([[view1.point]], '$.lon')::jsonb::numeric < 2 OR JSON_QUERY_OR_NULL([[view1.point]], '$.something')::jsonb::numeric > 3)`,
 		},
+		{
+			"strftime with fixed string as time-value against known empty value (null normalizations)",
+			"demo5",
+			"strftime('%Y-%m', '2026-01-01') = ''",
+			false,
+			"SELECT `demo5`.* FROM `demo5` WHERE ((strftime({:TEST},{:TEST}) = '' OR strftime({:TEST},{:TEST}) IS NULL))",
+		},
+		{
+			"strftime without multi-match",
+			"demo5",
+			"strftime('%Y-%m', rel_one.created) = true",
+			false,
+			"SELECT DISTINCT `demo5`.* FROM `demo5` LEFT JOIN `demo4` `demo5_rel_one` ON [[demo5_rel_one.id]] = [[demo5.rel_one]] WHERE strftime({:TEST},[[demo5_rel_one.created]]) = 1",
+		},
+		{
+			"strftime with multi-match",
+			"demo5",
+			"strftime('%Y-%m', rel_many.created) = true",
+			false,
+			"SELECT DISTINCT `demo5`.* FROM `demo5` LEFT JOIN json_each(CASE WHEN iif(json_valid([[demo5.rel_many]]), json_type([[demo5.rel_many]])='array', FALSE) THEN [[demo5.rel_many]] ELSE json_array([[demo5.rel_many]]) END) `__je_demo5_rel_many` LEFT JOIN `demo4` `demo5_rel_many` ON [[demo5_rel_many.id]] = [[__je_demo5_rel_many.value]] WHERE (((strftime({:TEST},[[demo5_rel_many.created]]) = 1) AND (NOT EXISTS (SELECT 1 FROM (SELECT strftime({:TEST},[[__mm_demo5_rel_many.created]]) as [[multiMatchValue]] FROM `demo5` `__mm_demo5` LEFT JOIN json_each(CASE WHEN iif(json_valid([[__mm_demo5.rel_many]]), json_type([[__mm_demo5.rel_many]])='array', FALSE) THEN [[__mm_demo5.rel_many]] ELSE json_array([[__mm_demo5.rel_many]]) END) `__mm_demo5_rel_many_je` LEFT JOIN `demo4` `__mm_demo5_rel_many` ON [[__mm_demo5_rel_many.id]] = [[__mm_demo5_rel_many_je.value]] WHERE `__mm_demo5`.`id` = `demo5`.`id`) {{__smTEST}} WHERE NOT ([[__smTEST.multiMatchValue]] = 1)))))",
+		},
 	}
 
 	for _, s := range scenarios {
@@ -977,7 +967,7 @@ func TestRecordFieldResolverResolveCollectionFields(t *testing.T) {
 		{"@request.auth.demo1_via_file_one.id", false, "NULL"}, // not a relation field
 		{"@request.auth.demo1_via_rel_one.id", false, "NULL"},  // relation field but to a different collection
 
-		// @collection fieds
+		// @collection fields
 		{"@collect", true, ""},
 		{"collection.demo4.title", true, ""},
 		{"@collection", true, ""},
@@ -1139,7 +1129,7 @@ func TestRecordFieldResolverResolveStaticRequestInfoFields(t *testing.T) {
 				t.Fatalf("Expected parameter r.Identifier %q, got %q", paramName, r.Identifier)
 			}
 
-			encodedParamValue, _ := json.Marshal(paramValue)
+			encodedParamValue, _ := json.Marshal(paramValue, json.Deterministic(true))
 			if string(encodedParamValue) != s.expectParamValue {
 				t.Fatalf("Expected r.Params %#v for %s, got %#v", s.expectParamValue, r.Identifier, string(encodedParamValue))
 			}

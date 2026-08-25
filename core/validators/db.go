@@ -7,9 +7,9 @@ import (
 	"slices"
 	"strings"
 
-	validation "github.com/go-ozzo/ozzo-validation/v4"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pocketbase/dbx"
+	validation "github.com/pocketbase/ozzo-validation/v4"
 )
 
 // UniqueId checks whether a field string id already exists in the specified table.

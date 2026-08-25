@@ -1,7 +1,8 @@
 package picker
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"strings"
 
 	"github.com/pocketbase/pocketbase/tools/search"
@@ -29,9 +30,12 @@ func Pick(data any, rawFields string) (any, error) {
 	// implementations are invoked, and then convert it back to a plain
 	// json value that we can further operate on.
 	//
+	// Note that invalid UTF8 characters are mangled for compatibility
+	// with earlier versions and to prevent unnecessery causing an error.
+	//
 	// @todo research other approaches to avoid the double serialization
 	// ---
-	encoded, err := json.Marshal(data)
+	encoded, err := json.Marshal(data, jsontext.AllowInvalidUTF8(true))
 	if err != nil {
 		return nil, err
 	}

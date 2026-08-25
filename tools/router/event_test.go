@@ -3,7 +3,7 @@ package router_test
 import (
 	"bytes"
 	"crypto/tls"
-	"encoding/json"
+	"encoding/json/v2"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	validation "github.com/go-ozzo/ozzo-validation/v4"
+	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/pocketbase/pocketbase/tools/router"
 )
 
@@ -328,7 +328,7 @@ func TestEventSetAllGetAll(t *testing.T) {
 		"a": 123,
 		"b": 456,
 	}
-	rawData, err := json.Marshal(data)
+	rawData, err := json.Marshal(data, json.Deterministic(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,11 +336,11 @@ func TestEventSetAllGetAll(t *testing.T) {
 	event := router.Event{}
 	event.SetAll(data)
 
-	// modify the data to ensure that the map was shallow coppied
+	// modify the data to ensure that the map was shallow copied
 	data["c"] = 789
 
 	result := event.GetAll()
-	rawResult, err := json.Marshal(result)
+	rawResult, err := json.Marshal(result, json.Deterministic(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,19 +354,19 @@ func TestEventString(t *testing.T) {
 	scenarios := []testResponseWriteScenario[string]{
 		{
 			name:            "no explicit content-type",
-			status:          123,
+			status:          234,
 			headers:         nil,
 			body:            "test",
-			expectedStatus:  123,
+			expectedStatus:  234,
 			expectedHeaders: map[string]string{"content-type": "text/plain; charset=utf-8"},
 			expectedBody:    "test",
 		},
 		{
 			name:            "with explicit content-type",
-			status:          123,
+			status:          234,
 			headers:         map[string]string{"content-type": "text/test"},
 			body:            "test",
-			expectedStatus:  123,
+			expectedStatus:  234,
 			expectedHeaders: map[string]string{"content-type": "text/test"},
 			expectedBody:    "test",
 		},
@@ -383,19 +383,19 @@ func TestEventHTML(t *testing.T) {
 	scenarios := []testResponseWriteScenario[string]{
 		{
 			name:            "no explicit content-type",
-			status:          123,
+			status:          234,
 			headers:         nil,
 			body:            "test",
-			expectedStatus:  123,
+			expectedStatus:  234,
 			expectedHeaders: map[string]string{"content-type": "text/html; charset=utf-8"},
 			expectedBody:    "test",
 		},
 		{
 			name:            "with explicit content-type",
-			status:          123,
+			status:          234,
 			headers:         map[string]string{"content-type": "text/test"},
 			body:            "test",
-			expectedStatus:  123,
+			expectedStatus:  234,
 			expectedHeaders: map[string]string{"content-type": "text/test"},
 			expectedBody:    "test",
 		},
@@ -409,9 +409,14 @@ func TestEventHTML(t *testing.T) {
 }
 
 func TestEventJSON(t *testing.T) {
-	body := map[string]any{"a": 123, "b": 456, "c": "test"}
-	expectedPickedBody := `{"a":123,"c":"test"}` + "\n"
-	expectedFullBody := `{"a":123,"b":456,"c":"test"}` + "\n"
+	body := map[string]any{
+		"a": 123,
+		"b": true,
+		"c": "test",
+		"d": "\xc3", /* invalid utf8 char to test mangling */
+	}
+	expectedPickedBody := `{"a":123,"c":"test"}`
+	expectedFullBody := `{"a":123,"b":true,"c":"test","d":"�"}`
 
 	scenarios := []testResponseWriteScenario[any]{
 		{
@@ -673,7 +678,7 @@ func TestEventFileFS(t *testing.T) {
 func TestEventError(t *testing.T) {
 	err := new(router.Event).Error(123, "message_test", map[string]any{"a": validation.Required, "b": "test"})
 
-	result, _ := json.Marshal(err)
+	result, _ := json.Marshal(err, json.Deterministic(true))
 	expected := `{"data":{"a":{"code":"validation_invalid_value","message":"Invalid value."},"b":{"code":"validation_invalid_value","message":"Invalid value."}},"message":"Message_test.","status":123}`
 
 	if string(result) != expected {
@@ -684,7 +689,7 @@ func TestEventError(t *testing.T) {
 func TestEventBadRequestError(t *testing.T) {
 	err := new(router.Event).BadRequestError("message_test", map[string]any{"a": validation.Required, "b": "test"})
 
-	result, _ := json.Marshal(err)
+	result, _ := json.Marshal(err, json.Deterministic(true))
 	expected := `{"data":{"a":{"code":"validation_invalid_value","message":"Invalid value."},"b":{"code":"validation_invalid_value","message":"Invalid value."}},"message":"Message_test.","status":400}`
 
 	if string(result) != expected {
@@ -695,7 +700,7 @@ func TestEventBadRequestError(t *testing.T) {
 func TestEventNotFoundError(t *testing.T) {
 	err := new(router.Event).NotFoundError("message_test", map[string]any{"a": validation.Required, "b": "test"})
 
-	result, _ := json.Marshal(err)
+	result, _ := json.Marshal(err, json.Deterministic(true))
 	expected := `{"data":{"a":{"code":"validation_invalid_value","message":"Invalid value."},"b":{"code":"validation_invalid_value","message":"Invalid value."}},"message":"Message_test.","status":404}`
 
 	if string(result) != expected {
@@ -706,7 +711,7 @@ func TestEventNotFoundError(t *testing.T) {
 func TestEventForbiddenError(t *testing.T) {
 	err := new(router.Event).ForbiddenError("message_test", map[string]any{"a": validation.Required, "b": "test"})
 
-	result, _ := json.Marshal(err)
+	result, _ := json.Marshal(err, json.Deterministic(true))
 	expected := `{"data":{"a":{"code":"validation_invalid_value","message":"Invalid value."},"b":{"code":"validation_invalid_value","message":"Invalid value."}},"message":"Message_test.","status":403}`
 
 	if string(result) != expected {
@@ -717,7 +722,7 @@ func TestEventForbiddenError(t *testing.T) {
 func TestEventUnauthorizedError(t *testing.T) {
 	err := new(router.Event).UnauthorizedError("message_test", map[string]any{"a": validation.Required, "b": "test"})
 
-	result, _ := json.Marshal(err)
+	result, _ := json.Marshal(err, json.Deterministic(true))
 	expected := `{"data":{"a":{"code":"validation_invalid_value","message":"Invalid value."},"b":{"code":"validation_invalid_value","message":"Invalid value."}},"message":"Message_test.","status":401}`
 
 	if string(result) != expected {
@@ -728,7 +733,7 @@ func TestEventUnauthorizedError(t *testing.T) {
 func TestEventTooManyRequestsError(t *testing.T) {
 	err := new(router.Event).TooManyRequestsError("message_test", map[string]any{"a": validation.Required, "b": "test"})
 
-	result, _ := json.Marshal(err)
+	result, _ := json.Marshal(err, json.Deterministic(true))
 	expected := `{"data":{"a":{"code":"validation_invalid_value","message":"Invalid value."},"b":{"code":"validation_invalid_value","message":"Invalid value."}},"message":"Message_test.","status":429}`
 
 	if string(result) != expected {
@@ -739,7 +744,7 @@ func TestEventTooManyRequestsError(t *testing.T) {
 func TestEventInternalServerError(t *testing.T) {
 	err := new(router.Event).InternalServerError("message_test", map[string]any{"a": validation.Required, "b": "test"})
 
-	result, _ := json.Marshal(err)
+	result, _ := json.Marshal(err, json.Deterministic(true))
 	expected := `{"data":{"a":{"code":"validation_invalid_value","message":"Invalid value."},"b":{"code":"validation_invalid_value","message":"Invalid value."}},"message":"Message_test.","status":500}`
 
 	if string(result) != expected {
@@ -873,7 +878,7 @@ func TestEventBindBody(t *testing.T) {
 				t.Fatalf("Expected hasErr %v, got %v (%v)", s.expectError, hasErr, err)
 			}
 
-			dstRaw, err := json.Marshal(dst)
+			dstRaw, err := json.Marshal(dst, json.Deterministic(true))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -925,29 +930,32 @@ func testEventResponseWrite[T any](
 		}
 
 		result := rec.Result()
+		defer result.Body.Close()
 
 		if result.StatusCode != scenario.expectedStatus {
 			t.Fatalf("Expected status code %d, got %d", scenario.expectedStatus, result.StatusCode)
 		}
 
-		resultBody, err := io.ReadAll(result.Body)
-		result.Body.Close()
+		rawBody, err := io.ReadAll(result.Body)
 		if err != nil {
 			t.Fatalf("Failed to read response body: %v", err)
 		}
+		strBody := string(rawBody)
 
-		resultBody, err = json.Marshal(string(resultBody))
-		if err != nil {
-			t.Fatal(err)
+		// try to deserialize into a map and then serialize again in a
+		// deterministic manner in case it is json
+		var jsonBody any
+		err = json.Unmarshal(rawBody, &jsonBody)
+		if err == nil {
+			normalized, err := json.Marshal(jsonBody, json.Deterministic(true))
+			if err != nil {
+				t.Fatalf("Failed to deterministicly serialize json body\n%s\ngot\n%v", jsonBody, err)
+			}
+			strBody = string(normalized)
 		}
 
-		expectedBody, err := json.Marshal(scenario.expectedBody)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if !bytes.Equal(resultBody, expectedBody) {
-			t.Fatalf("Expected body\n%s\ngot\n%s", expectedBody, resultBody)
+		if scenario.expectedBody != strBody {
+			t.Fatalf("Expected body\n%s\ngot\n%s", scenario.expectedBody, strBody)
 		}
 
 		for k, ev := range scenario.expectedHeaders {

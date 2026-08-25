@@ -2,7 +2,7 @@ package core_test
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"testing"
 
 	"github.com/pocketbase/dbx"
@@ -296,12 +296,12 @@ func TestSingleVsMultipleValuesNormalization(t *testing.T) {
 				t.Fatalf("Failed to load record: %v", err)
 			}
 
-			encodedResult, err := json.Marshal(result)
+			encodedResult, err := json.Marshal(result, json.Deterministic(true))
 			if err != nil {
 				t.Fatalf("Failed to encode result: %v", err)
 			}
 
-			encodedExpectation, err := json.Marshal(s.expected)
+			encodedExpectation, err := json.Marshal(s.expected, json.Deterministic(true))
 			if err != nil {
 				t.Fatalf("Failed to encode expectation: %v", err)
 			}
@@ -310,5 +310,51 @@ func TestSingleVsMultipleValuesNormalization(t *testing.T) {
 				t.Fatalf("Expected \n%s, \ngot \n%s", encodedExpectation, encodedResult)
 			}
 		})
+	}
+}
+
+func TestDropIndexWithoutTableName(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	properIndex := "CREATE INDEX `new_test_idx2` ON `new_test` (`test`)"
+	indexWithoutTableName := "CREATE INDEX `new_test_idx2` ON `` (`test`)"
+
+	dummyCollection := core.NewBaseCollection("new_test")
+	dummyCollection.Fields.Add(&core.TextField{Name: "test"})
+	dummyCollection.Indexes = []string{properIndex}
+
+	err := app.Save(dummyCollection)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// resave without table name but without hooks to avoid the normalizations
+	dummyCollection.Indexes[0] = indexWithoutTableName
+	err = app.UnsafeWithoutHooks().Save(dummyCollection)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dummyCollection, err = app.FindCollectionByNameOrId(dummyCollection.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// resave should normalize the index
+	err = app.Save(dummyCollection)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dummyCollection, err = app.FindCollectionByNameOrId(dummyCollection.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(dummyCollection.Indexes) != 1 || dummyCollection.Indexes[0] != properIndex {
+		t.Fatalf("Expected exactly 1 index\n%s\ngot\n%v", properIndex, dummyCollection.Indexes)
 	}
 }

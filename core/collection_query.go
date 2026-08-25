@@ -3,7 +3,7 @@ package core
 import (
 	"bytes"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"slices"
@@ -257,72 +257,6 @@ func (app *BaseApp) TruncateCollection(collection *Collection) error {
 
 // -------------------------------------------------------------------
 
-// saveViewCollection persists the provided View collection changes:
-//   - deletes the old related SQL view (if any)
-//   - creates a new SQL view with the latest newCollection.Options.Query
-//   - generates new feilds list  based on newCollection.Options.Query
-//   - updates newCollection.Fields based on the generated view table info and query
-//   - saves the newCollection
-//
-// This method returns an error if newCollection is not a "view".
-func saveViewCollection(app App, newCollection, oldCollection *Collection) error {
-	if !newCollection.IsView() {
-		return errors.New("not a view collection")
-	}
-
-	return app.RunInTransaction(func(txApp App) error {
-		query := newCollection.ViewQuery
-
-		// generate collection fields from the query
-		viewFields, err := txApp.CreateViewFields(query)
-		if err != nil {
-			return err
-		}
-
-		/* SQLite:
-		// delete old renamed view
-		if oldCollection != nil {
-			if err := txApp.DeleteView(oldCollection.Name); err != nil {
-				return err
-			}
-		}
-		*/
-		// PostgreSQL:
-		// Note:
-		// 1. When we rename a table or a view, both SQLite and PostgreSQL will update
-		//    all other views that depends on it by modifier their DDL SQL.
-		// 2. Why do we need to rename the old view? Because we need to find all the dependent views
-		//    and their DDL SQL by running `findDependentViews` function. If we don't rename
-		// 	  before getting the DDL SQL, then these DDL will still reference the old view name.
-		// 3. In SQLite we don't have the problem, because we won't drop all the dependent views when
-		// 	  we modify a view. But in PostgreSQL we will drop all the dependent views and then restore it.
-		// 4. Why do we need to drop all dependent views in PostgreSQL? Because we need to update the view,
-		//    although there is a `CREATE OR REPLACE VIEW` statement, but it forbids us to remove any column
-		//    from the view. So we need to drop the view. And we we drop the view, we also need to drop all
-		//    the dependent views otherwise PostgreSQL will complain too.
-		if oldCollection != nil && oldCollection.Name != newCollection.Name {
-			if _, err := txApp.DB().RenameTable(oldCollection.Name, newCollection.Name).Execute(); err != nil {
-				return err
-			}
-		}
-
-		// wrap view query if necessary
-		query, err = normalizeViewQueryId(txApp, query)
-		if err != nil {
-			return fmt.Errorf("failed to normalize view query id: %w", err)
-		}
-
-		// (re)create the view
-		if err := txApp.SaveView(newCollection.Name, query); err != nil {
-			return err
-		}
-
-		newCollection.Fields = viewFields
-
-		return txApp.Save(newCollection)
-	})
-}
-
 // normalizeViewQueryId wraps (if necessary) the provided view query
 // with a subselect to ensure that the id column is a text since
 // currently we don't support non-string model ids
@@ -372,55 +306,59 @@ func resaveViewsWithChangedFields(app App, excludeIds ...string) error {
 	}
 
 	return app.RunInTransaction(func(txApp App) error {
+		var collectionErrors []error
+
 		for _, collection := range collections {
 			if len(excludeIds) > 0 && list.ExistInSlice(collection.Id, excludeIds) {
 				continue
 			}
 
-			// clone the existing fields for temp modifications
-			oldFields, err := collection.Fields.Clone()
-			if err != nil {
-				return err
+			check := func() error {
+				// clone the existing fields for temp modifications
+				oldFields, err := collection.Fields.Clone()
+				if err != nil {
+					return err
+				}
+
+				// generate new fields from the query
+				newFields, err := txApp.CreateViewFields(collection.ViewQuery)
+				if err != nil {
+					return err
+				}
+
+				// unset the fields' ids to exclude from the comparison
+				for _, f := range oldFields {
+					f.SetId("")
+				}
+				for _, f := range newFields {
+					f.SetId("")
+				}
+
+				encodedNewFields, err := json.Marshal(newFields, json.Deterministic(true))
+				if err != nil {
+					return err
+				}
+
+				encodedOldFields, err := json.Marshal(oldFields, json.Deterministic(true))
+				if err != nil {
+					return err
+				}
+
+				if bytes.EqualFold(encodedNewFields, encodedOldFields) {
+					return nil // no changes
+				}
+
+				return txApp.Save(collection)
 			}
 
-			// generate new fields from the query
-			// Note:
-			// dry run the query by creating a temp view. If it succeeds,
-			// and somehow the view fields are different than existing view,
-			// we will save the temp view as the new view.
-			// If it a dependent table/view does not exist, it will throw an error.
-			newFields, err := txApp.CreateViewFields(collection.ViewQuery)
-			if err != nil {
-				return err
-			}
-
-			// unset the fields' ids to exclude from the comparison
-			for _, f := range oldFields {
-				f.SetId("")
-			}
-			for _, f := range newFields {
-				f.SetId("")
-			}
-
-			encodedNewFields, err := json.Marshal(newFields)
-			if err != nil {
-				return err
-			}
-
-			encodedOldFields, err := json.Marshal(oldFields)
-			if err != nil {
-				return err
-			}
-
-			if bytes.EqualFold(encodedNewFields, encodedOldFields) {
-				continue // no changes
-			}
-
-			if err := saveViewCollection(txApp, collection, nil); err != nil {
-				return err
+			if err := check(); err != nil {
+				collectionErrors = append(
+					collectionErrors,
+					fmt.Errorf("[%s] %w", collection.Name, err),
+				)
 			}
 		}
 
-		return nil
+		return errors.Join(collectionErrors...)
 	})
 }

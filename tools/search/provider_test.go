@@ -3,12 +3,13 @@ package search
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,7 +141,7 @@ func TestProviderSort(t *testing.T) {
 		Sort(initialSort).
 		AddSort(SortField{"test3", SortDesc})
 
-	encoded, _ := json.Marshal(p.sort)
+	encoded, _ := json.Marshal(p.sort, json.Deterministic(true))
 	expected := `[{"name":"test1","direction":"ASC"},{"name":"test2","direction":"ASC"},{"name":"test3","direction":"DESC"}]`
 
 	if string(encoded) != expected {
@@ -155,7 +156,7 @@ func TestProviderFilter(t *testing.T) {
 		Filter(initialFilter).
 		AddFilter("test3")
 
-	encoded, _ := json.Marshal(p.filter)
+	encoded, _ := json.Marshal(p.filter, json.Deterministic(true))
 	expected := `["test1","test2","test3"]`
 
 	if string(encoded) != expected {
@@ -248,12 +249,12 @@ func TestProviderParse(t *testing.T) {
 				t.Fatalf("Expected perPage %v, got %v", s.expectPerPage, p.perPage)
 			}
 
-			encodedSort, _ := json.Marshal(p.sort)
+			encodedSort, _ := json.Marshal(p.sort, json.Deterministic(true))
 			if string(encodedSort) != s.expectSort {
 				t.Fatalf("Expected sort %v, got \n%v", s.expectSort, string(encodedSort))
 			}
 
-			encodedFilter, _ := json.Marshal(p.filter)
+			encodedFilter, _ := json.Marshal(p.filter, json.Deterministic(true))
 			if string(encodedFilter) != s.expectFilter {
 				t.Fatalf("Expected filter %v, got \n%v", s.expectFilter, string(encodedFilter))
 			}
@@ -489,7 +490,7 @@ func TestProviderExecNonEmptyQuery(t *testing.T) {
 				t.Fatalf("Expected resolver.Update to be called %d, got %d", 1, testResolver.UpdateQueryCalls)
 			}
 
-			encoded, _ := json.Marshal(result)
+			encoded, _ := json.Marshal(result, json.Deterministic(true))
 			if string(encoded) != s.expectResult {
 				t.Fatalf("Expected result %v, got \n%v", s.expectResult, string(encoded))
 			}
@@ -756,7 +757,7 @@ func TestProviderParseAndExec(t *testing.T) {
 				t.Fatalf("Expected %d db queries, got %d: \n%v", expectedQueries, len(testDB.CalledQueries), testDB.CalledQueries)
 			}
 
-			encoded, _ := json.Marshal(result)
+			encoded, _ := json.Marshal(result, json.Deterministic(true))
 			if string(encoded) != s.expectResult {
 				t.Fatalf("Expected result \n%v\ngot\n%v", s.expectResult, string(encoded))
 			}
@@ -776,6 +777,7 @@ type testTableStruct struct {
 
 type testDB struct {
 	*dbx.DB
+	mu            sync.Mutex
 	CalledQueries []string
 }
 
@@ -804,6 +806,8 @@ func createTestDB() (*testDB, func()) {
 	db.Insert("test", dbx.Params{"id": 1, "test1": 1, "test2": "test2.1"}).Execute()
 	db.Insert("test", dbx.Params{"id": 2, "test1": 2, "test2": "test2.2"}).Execute()
 	db.QueryLogFunc = func(ctx context.Context, t time.Duration, sql string, rows *sql.Rows, err error) {
+		db.mu.Lock()
+		defer db.mu.Unlock()
 		db.CalledQueries = append(db.CalledQueries, sql)
 	}
 

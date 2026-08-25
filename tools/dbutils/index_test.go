@@ -2,7 +2,7 @@ package dbutils_test
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"strings"
 	"testing"
@@ -75,7 +75,7 @@ func TestParseIndex(t *testing.T) {
 
 			resultRaw, err := json.Marshal(result)
 			if err != nil {
-				t.Fatalf("Faild to marshalize parse result: %v", err)
+				t.Fatalf("Failed to marshalize parse result: %v", err)
 			}
 
 			expectedRaw, err := json.Marshal(s.expected)

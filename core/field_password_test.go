@@ -2,7 +2,7 @@ package core_test
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -287,6 +287,7 @@ func TestPasswordFieldValidateValue(t *testing.T) {
 func TestPasswordFieldValidateSettings(t *testing.T) {
 	testDefaultFieldIdValidation(t, core.FieldTypePassword)
 	testDefaultFieldNameValidation(t, core.FieldTypePassword)
+	testDefaultFieldHelpValidation[core.PasswordField](t)
 
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
@@ -495,7 +496,7 @@ func TestPasswordFieldFindSetter(t *testing.T) {
 
 			setter(record, s.value)
 
-			raw, err := json.Marshal(record.Get(s.field.GetName()))
+			raw, err := json.Marshal(record.Get(s.field.GetName()), json.Deterministic(true))
 			if err != nil {
 				t.Fatal(err)
 			}
