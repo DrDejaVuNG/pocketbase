@@ -53,4 +53,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/pocketbase/dbx v1.11.0 => github.com/fondoger/dbx v0.0.0-20250428115856-688aa3631781
+replace github.com/pocketbase/dbx => github.com/DrDejaVuNG/dbx v0.0.0-20260824235413-443867223202

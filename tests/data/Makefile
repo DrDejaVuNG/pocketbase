@@ -13,10 +13,13 @@ run-docker:
 	docker run -d --rm --name postgres -e POSTGRES_USER=user -e POSTGRES_PASSWORD=pass -p 5432:5432 postgres:alpine
 
 # Max performance for unit tests.
+# Note: since PostgreSQL 18, the official docker images store the data under
+# /var/lib/postgresql (not /var/lib/postgresql/data), so the tmpfs mount must
+# target the parent directory (see docker-library/postgres#37).
 run-docker-unit-test-only:
 	docker run -d --rm --name postgres -e POSTGRES_USER=user -e POSTGRES_PASSWORD=pass \
-		--tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=2G \
-		-p 5432:5432 postgres:alpine \
+		--tmpfs /var/lib/postgresql:rw,noexec,nosuid,size=2G \
+		-p 5432:5432 postgres:18-alpine \
 		-c fsync=off \
 		-c synchronous_commit=off \
 		-c full_page_writes=off \
