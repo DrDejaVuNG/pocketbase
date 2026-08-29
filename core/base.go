@@ -233,6 +233,21 @@ func NewBaseApp(config BaseAppConfig) *BaseApp {
 	}
 
 	// apply config defaults
+	if app.config.PostgresURL == "" {
+		if app.config.PostgresURL = os.Getenv("POSTGRES_URL"); app.config.PostgresURL == "" {
+			app.config.PostgresURL = "postgres://user:pass@127.0.0.1:5432/postgres?sslmode=disable"
+		}
+	}
+	if app.config.PostgresDataDB == "" {
+		if app.config.PostgresDataDB = os.Getenv("POSTGRES_DATA_DB"); app.config.PostgresDataDB == "" {
+			app.config.PostgresDataDB = "pb-data"
+		}
+	}
+	if app.config.PostgresAuxDB == "" {
+		if app.config.PostgresAuxDB = os.Getenv("POSTGRES_AUX_DB"); app.config.PostgresAuxDB == "" {
+			app.config.PostgresAuxDB = "pb-auxiliary"
+		}
+	}
 	if app.config.DBConnect == nil {
 		app.config.DBConnect = PostgresDBConnectFunc(app.config.PostgresURL)
 	}

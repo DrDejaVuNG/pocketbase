@@ -5,9 +5,8 @@
 - ✅ PostgresSQL (v17+) support
 - ✅ Support horizontal scaling
 - ✅ Realtime events works normally with horizontal scaling
-- ✅ 100% test case pass rate across total 4701 unit tests
-- ✅ Fully compatible with latest PocketBase SDKs/Docs
-
+- ✅ 100% test case pass rate across all unit and integration tests
+- ✅ Fully compatible with upstream PocketBase v0.40.1 SDKs/Docs
 **Demo App**
 
 To demonstrate the horizontal scaling and realtime capabilities, I have deployed a **realtime chat demo app** on two different PocketBase instances.
@@ -38,8 +37,8 @@ See: [pocketbase/pocketbase](https://github.com/pocketbase/pocketbase)
      -p 5432:5432 \
      -e POSTGRES_USER=user \
      -e POSTGRES_PASSWORD=pass \
-     -v ./pg_data:/var/lib/postgresql/data \
-     postgres:alpine
+     -v ./pg_data:/var/lib/postgresql \
+     postgres:18-alpine
    ```
 
 2. Start PocketBase (Don't use @latest tag, use a specific version in production)

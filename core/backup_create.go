@@ -65,6 +65,14 @@ var errIsDir = errors.New("the specified path is a directory and not a regular f
 // acceptable trade-off between performance and correctness because in
 // the worst case there will be some unused storage files in the backup that don't do any harm.
 func (app *BaseApp) CreateBackup(ctx context.Context, name string) error {
+	// PostgreSQL:
+	// The built-in backup is not supported when running on PostgreSQL because
+	// it relies on SQLite specific statements (VACUUM INTO / PRAGMA wal_checkpoint).
+	// Use external tooling instead, e.g. pg_dump / pg_dumpall.
+	if app.config.PostgresURL != "" {
+		return errors.New("the built-in backups are not supported with PostgreSQL - use pg_dump or another PostgreSQL backup solution instead")
+	}
+
 	if app.Store().Has(StoreKeyActiveBackup) {
 		return errors.New("try again later - another backup/restore operation has already been started")
 	}

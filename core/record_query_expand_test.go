@@ -521,7 +521,11 @@ func TestExpandRecordsQuerySkipDuplicatedIds(t *testing.T) {
 	}
 
 	// "oap640cot4yru2s" is used in both relations but must exists only once
+	/* SQLite:
 	expected := "SELECT `users`.* FROM `users` WHERE `users`.`id` IN ('oap640cot4yru2s', 'bgs820n361vj1qd', '4q1xlclmfloku33')"
+	*/
+	// PostgreSQL:
+	expected := `SELECT "users".* FROM "users" WHERE "users"."id" IN ('oap640cot4yru2s', 'bgs820n361vj1qd', '4q1xlclmfloku33')`
 	if concurrentQueries[0] != expected {
 		t.Fatalf("Expected query\n%v\ngot\n%v", expected, concurrentQueries[0])
 	}

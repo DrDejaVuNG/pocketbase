@@ -45,7 +45,7 @@ func JSONEachByPlaceholder(placeholder string) string {
 // The type of the key is only supported to be string.
 // If we want to support other types, we may need to use `@>` operator instead.
 func JsonArrayExistsStr(column string, strValue string) dbx.Expression {
-	return dbx.NewExp(fmt.Sprintf("[[%s]] ? {:value}::text", column), dbx.Params{
+	return dbx.NewExp(fmt.Sprintf("(CASE WHEN ([[%s]] IS JSON OR json_valid([[%s]]::text)) THEN [[%s]]::jsonb ? {:value}::text ELSE FALSE END)", column, column, column), dbx.Params{
 		"value": strValue,
 	})
 }

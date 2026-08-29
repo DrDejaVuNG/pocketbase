@@ -24,10 +24,11 @@ func init() {
 			}
 
 			masterIndexes := []struct {
-				Name string `db:"name"`
-				SQL  string `db:"sql"`
+				Name string `db:"indexname"`
+				SQL  string `db:"indexdef"`
 			}{}
 
+			/* SQLite:
 			err := txApp.DB().Select("name", "sql").
 				From("sqlite_master").
 				AndWhere(dbx.HashExp{
@@ -36,6 +37,21 @@ func init() {
 				}).
 				AndWhere(dbx.NewExp("sql IS NOT NULL AND name NOT LIKE 'sqlite_autoindex_%'")).
 				All(&masterIndexes)
+			*/
+			// PostgreSQL:
+			// Note: similar to BaseApp.TableIndexes(), we exclude the
+			// auto created primary key indexes via the pg_constraint subquery
+			// (equivalent to SQLite's `sql IS NOT NULL` + autoindex filters).
+			err := txApp.DB().NewQuery(`
+				SELECT indexname, indexdef
+				FROM pg_indexes
+				WHERE tablename = {:tableName}
+				AND indexname NOT IN (
+					SELECT conname
+					FROM pg_constraint
+					WHERE contype = 'p' AND conrelid = {:tableName}::regclass
+				)
+			`).Bind(dbx.Params{"tableName": collection.Name}).All(&masterIndexes)
 			if err != nil {
 				return err
 			}

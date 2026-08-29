@@ -176,6 +176,7 @@ func TestNotifyWatcher_CollectionsUpdate(t *testing.T) {
 	nonconcurrentQueries := testQueries.Get("nonconcurrent")
 	concurrentQueries := testQueries.Get("concurrent")
 
+	/* SQLite:
 	if len(nonconcurrentQueries) != 0 {
 		t.Fatalf("Expected 0 concurrent queries, got %d (%v)", len(nonconcurrentQueries), nonconcurrentQueries)
 	}
@@ -186,5 +187,17 @@ func TestNotifyWatcher_CollectionsUpdate(t *testing.T) {
 	expectedQuery := "SELECT {{_collections}}.* FROM `_collections` ORDER BY `rowid` ASC"
 	if concurrentQueries[0] != expectedQuery {
 		t.Fatalf("Expected query\n%s\ngot\n%s", expectedQuery, concurrentQueries[0])
+	}
+	*/
+	// PostgreSQL:
+	// In PostgreSQL, ConcurrentDB and NonconcurrentDB share the same *dbx.DB instance,
+	// so the latter QueryLogFunc hook takes effect and logs to nonconcurrentQueries.
+	totalQueries := append(concurrentQueries, nonconcurrentQueries...)
+	if len(totalQueries) != 1 {
+		t.Fatalf("Expected 1 query, got %d (%v)", len(totalQueries), totalQueries)
+	}
+	expectedQuery := `SELECT {{_collections}}.* FROM "_collections" ORDER BY "ctid" ASC`
+	if totalQueries[0] != expectedQuery {
+		t.Fatalf("Expected query\n%s\ngot\n%s", expectedQuery, totalQueries[0])
 	}
 }

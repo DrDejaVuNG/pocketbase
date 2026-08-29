@@ -695,6 +695,7 @@ func TestCreateViewFieldsWithNumberOnlyInt(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
+	/* SQLite:
 	sql := `select
 		a.id,
 		count(a.id) count,
@@ -705,6 +706,18 @@ func TestCreateViewFieldsWithNumberOnlyInt(t *testing.T) {
 		cast(a.id as decimal) cast_decimal,
 		cast(a.id as numeric) cast_numeric
 	from demo1 a`
+	*/
+	// PostgreSQL:
+	sql := `select
+		a.id,
+		count(a.id) count,
+		total(a.id) total,
+		cast(a.id as int) cast_int,
+		cast(a.id as integer) cast_integer,
+		cast(a.id as real) cast_real,
+		cast(a.id as decimal) cast_decimal,
+		cast(a.id as numeric) cast_numeric
+	from demo1 a group by a.id`
 
 	result, err := app.CreateViewFields(sql)
 	if err != nil {
@@ -917,7 +930,11 @@ func TestDryRunView(t *testing.T) {
 		},
 		{
 			"select with invalid formatted field name",
+			/* SQLite:
 			"select 'a' as id, count(*)", // missing field alias
+			*/
+			// PostgreSQL:
+			`select 'a' as id, 1 as "inv@lid"`,
 			10,
 			true,
 			nil,

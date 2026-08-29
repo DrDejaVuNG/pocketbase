@@ -2329,7 +2329,7 @@ func TestRecordDelete(t *testing.T) {
 	expectedRelManyPart := "SELECT `demo1`.* FROM `demo1` WHERE EXISTS (SELECT 1 FROM json_each(CASE WHEN iif(json_valid([[demo1.rel_many]]), json_type([[demo1.rel_many]])='array', FALSE) THEN [[demo1.rel_many]] ELSE json_array([[demo1.rel_many]]) END) {{__je__}} WHERE [[__je__.value]]='"
 	*/
 	// PostgreSQL:
-	expectedRelManyPart := `SELECT "demo1".* FROM "demo1" WHERE [[demo1.rel_many]] ? `
+	expectedRelManyPart := `SELECT "demo1".* FROM "demo1" WHERE (CASE WHEN ([[demo1.rel_many]] IS JSON OR json_valid([[demo1.rel_many]]::text)) THEN [[demo1.rel_many]]::jsonb ? `
 	if !strings.Contains(joinedQueries, expectedRelManyPart) {
 		t.Fatalf("(rec3) Expected the cascade delete to call the query \n%v, got \n%v", expectedRelManyPart, calledQueries)
 	}

@@ -2,64 +2,64 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 17.6
--- Dumped by pg_dump version 17.6
+-- Dumped from database version 18.6
+-- Dumped by pg_dump version 18.6
 
 -- Enable built-in pgcrypto extension to use gen_random_bytes function
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+	CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- Adding "nocase" collation to be compatible with SQLite's default "nocase" collation
-CREATE COLLATION IF NOT EXISTS "nocase" (
-  provider = icu,          -- Specify ICU as the provider
-  locale = 'und-u-ks-level2', -- Undetermined locale, Unicode extension (-u-), collation strength (ks) level 2 (level2)
-  deterministic = false    -- Case-insensitive collations are typically non-deterministic
-);
+	-- Adding "nocase" collation to be compatible with SQLite's built-in "nocase" collation
+	CREATE COLLATION IF NOT EXISTS "nocase" (
+		provider = icu,          -- Specify ICU as the provider
+		locale = 'und-u-ks-level2', -- Undetermined locale, Unicode extension (-u-), collation strength (ks) level 2 (level2)
+		deterministic = false    -- Case-insensitive collations are typically non-deterministic
+	);
 
--- Alias [hex] to encode(..., 'hex')
-CREATE OR REPLACE FUNCTION hex(data bytea)
-RETURNS text
-LANGUAGE SQL
-IMMUTABLE
-AS $$
-SELECT encode(data, 'hex')
-$$;
+	-- Alias [hex] to encode(..., 'hex')
+	CREATE OR REPLACE FUNCTION hex(data bytea)
+	RETURNS text
+	LANGUAGE SQL
+	IMMUTABLE
+	AS $$
+	SELECT encode(data, 'hex')
+	$$;
 
--- Alias [randomblob] to gen_random_bytes(...)
-CREATE OR REPLACE FUNCTION randomblob(length integer)
-RETURNS bytea
-LANGUAGE SQL
-IMMUTABLE
-AS $$
-SELECT gen_random_bytes(length)
-$$;
+	-- Alias [randomblob] to gen_random_bytes(...)
+	CREATE OR REPLACE FUNCTION randomblob(length integer)
+	RETURNS bytea
+	LANGUAGE SQL
+	IMMUTABLE
+	AS $$
+	SELECT gen_random_bytes(length)
+	$$;
 
--- Create the uuid_generate_v7 function
-create or replace function uuid_generate_v7()
-    returns uuid
-    as $$
-    begin
-    -- use random v4 uuid as starting point (which has the same variant we need)
-    -- then overlay timestamp
-    -- then set version 7 by flipping the 2 and 1 bit in the version 4 string
-    return encode(
-        set_bit(
-        set_bit(
-            overlay(uuid_send(gen_random_uuid())
-                    placing substring(int8send(floor(extract(epoch from clock_timestamp()) * 1000)::bigint) from 3)
-                    from 1 for 6
-            ),
-            52, 1
-        ),
-        53, 1
-        ),
-        'hex')::uuid;
-    end
-    $$
-    language plpgsql
-    volatile;
-
--- Create json_valid function
-CREATE OR REPLACE FUNCTION json_valid(text) RETURNS boolean AS $$
+	-- Create the uuid_generate_v7 function
+	create or replace function uuid_generate_v7()
+		returns uuid
+		as $$
+		begin
+		-- use random v4 uuid as starting point (which has the same variant we need)
+		-- then overlay timestamp
+		-- then set version 7 by flipping the 2 and 1 bit in the version 4 string
+		return encode(
+			set_bit(
+			set_bit(
+				overlay(uuid_send(gen_random_uuid())
+						placing substring(int8send(floor(extract(epoch from clock_timestamp()) * 1000)::bigint) from 3)
+						from 1 for 6
+				),
+				52, 1
+			),
+			53, 1
+			),
+			'hex')::uuid;
+		end
+		$$
+		language plpgsql
+		volatile;
+	
+	-- Create json_valid function
+	CREATE OR REPLACE FUNCTION json_valid(text) RETURNS boolean AS $$
 	BEGIN
 		PERFORM $1::jsonb;
 		RETURN TRUE;
@@ -68,22 +68,241 @@ CREATE OR REPLACE FUNCTION json_valid(text) RETURNS boolean AS $$
 	END;
 	$$ LANGUAGE plpgsql IMMUTABLE;
 
--- Create a json_query_or_null function that handles any types.
-CREATE OR REPLACE FUNCTION json_query_or_null(p_input jsonb, p_query text) RETURNS jsonb AS $$
-    SELECT JSON_QUERY(p_input, p_query)
-$$ LANGUAGE sql IMMUTABLE;
+	-- Create a json_query_or_null function that handles any types.
+	CREATE OR REPLACE FUNCTION json_query_or_null(p_input jsonb, p_query text) RETURNS jsonb AS $$
+		SELECT JSON_QUERY(p_input, p_query)
+	$$ LANGUAGE sql IMMUTABLE;
 
--- Create a json_query_or_null function that handles any types.
-CREATE OR REPLACE FUNCTION json_query_or_null(p_input anyelement, p_query text) RETURNS jsonb AS $$
-BEGIN
-    RETURN JSON_QUERY(p_input::text::jsonb, p_query);
-EXCEPTION WHEN others THEN
-    RETURN NULL;
+	-- Create a json_query_or_null function that handles any types.
+	CREATE OR REPLACE FUNCTION json_query_or_null(p_input anyelement, p_query text) RETURNS jsonb AS $$
+	BEGIN
+		RETURN JSON_QUERY(p_input::text::jsonb, p_query);
+	EXCEPTION WHEN others THEN
+		RETURN NULL;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
+
+-- Create total aggregate function compatible with SQLite's total()
+CREATE OR REPLACE FUNCTION total_sfunc(numeric, anyelement) RETURNS numeric AS $$
+BEGIN
+	RETURN coalesce($1, 0) + coalesce(nullif($2::text, '')::numeric, 0);
+EXCEPTION WHEN others THEN
+	RETURN coalesce($1, 0);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+CREATE OR REPLACE AGGREGATE total(anyelement) (
+	SFUNC = total_sfunc,
+	STYPE = numeric,
+	INITCOND = '0.0'
+);
+
+-- Create strftime functions compatible with SQLite's strftime
+-- (https://sqlite.org/lang_datefunc.html).
+-- Note: impl is STABLE because the single-argument overload resolves
+-- the "current time" (like SQLite) which must not be IMMUTABLE.
+CREATE OR REPLACE FUNCTION strftime_impl(p_format text, p_ts timestamptz, p_modifiers text[])
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+	v_ts timestamp with time zone := p_ts;
+	v_local boolean := false;
+	v_render timestamp without time zone;
+	i int;
+	m text;
+	n numeric;
+	unit text;
+	delta int;
+	result text := '';
+	pos int := 1;
+	ch text;
+	spec text;
+	y int;
+	mo int;
+	d int;
+	h int;
+	mi int;
+	sec numeric;
+	doy int;
+	dow int;
+BEGIN
+	IF v_ts IS NULL THEN
+		RETURN NULL;
+	END IF;
+
+	-- apply the modifiers in order
+	FOR i IN 1..coalesce(array_length(p_modifiers, 1), 0) LOOP
+		m := lower(btrim(p_modifiers[i]));
+		IF m = 'localtime' THEN
+			v_local := true;
+		ELSIF m = 'utc' THEN
+			v_local := false;
+		ELSIF m IN ('start of month', 'start of year', 'start of day') THEN
+			v_ts := date_trunc(substring(m from 10), v_ts);
+		ELSIF m ~ '^[+-]?[0-9]+(\.[0-9]+)?\s+(years?|months?|days?|hours?|minutes?|seconds?|milliseconds?)$' THEN
+			n := substring(m from '(^[+-]?[0-9]+(\.[0-9]+)?)')::numeric;
+			unit := substring(m from '(years?|months?|days?|hours?|minutes?|seconds?|milliseconds?)$');
+			unit := rtrim(unit, 's');
+			v_ts := v_ts + n * ('1 ' || unit)::interval;
+		ELSIF m ~ '^weekday [0-6]$' THEN
+			-- advance to the next date with the given weekday (0=sunday)
+			delta := substring(m from '([0-6]$)')::int;
+			v_ts := v_ts + (((delta - extract(dow from v_ts)::int) % 7) + 7) % 7 * interval '1 day';
+		ELSE
+			RAISE EXCEPTION 'unknown strftime modifier: %', m;
+		END IF;
+	END LOOP;
+
+	v_render := v_ts AT TIME ZONE (CASE WHEN v_local THEN current_setting('TimeZone') ELSE 'UTC' END);
+
+	y := extract(year from v_render)::int;
+	mo := extract(month from v_render)::int;
+	d := extract(day from v_render)::int;
+	h := extract(hour from v_render)::int;
+	mi := extract(minute from v_render)::int;
+	sec := extract(second from v_render);
+	doy := extract(doy from v_render)::int;
+	dow := extract(dow from v_render)::int;
+
+	WHILE pos <= length(p_format) LOOP
+		ch := substr(p_format, pos, 1);
+		IF ch = '%' AND pos < length(p_format) THEN
+			spec := substr(p_format, pos + 1, 1);
+			CASE spec
+				WHEN 'Y' THEN result := result || to_char(y, 'FM0000');
+				WHEN 'm' THEN result := result || to_char(mo, 'FM00');
+				WHEN 'd' THEN result := result || to_char(d, 'FM00');
+				WHEN 'H' THEN result := result || to_char(h, 'FM00');
+				WHEN 'k' THEN result := result || h::text;
+				WHEN 'I' THEN result := result || to_char(((h + 11) % 12) + 1, 'FM00');
+				WHEN 'l' THEN result := result || (((h + 11) % 12) + 1)::text;
+				WHEN 'M' THEN result := result || to_char(mi, 'FM00');
+				WHEN 'S' THEN result := result || to_char(floor(sec)::int, 'FM00');
+				WHEN 'f' THEN result := result || to_char(floor(sec)::int, 'FM00') || '.' || to_char(floor((sec - floor(sec)) * 1000)::int, 'FM000');
+				WHEN 'j' THEN result := result || to_char(doy, 'FM000');
+				WHEN 'J' THEN result := result || round(extract(epoch from v_ts) / 86400.0 + 2440587.5, 4)::text;
+				WHEN 'p' THEN result := result || CASE WHEN h < 12 THEN 'AM' ELSE 'PM' END;
+				WHEN 'P' THEN result := result || CASE WHEN h < 12 THEN 'am' ELSE 'pm' END;
+				WHEN 's' THEN result := result || floor(extract(epoch from v_ts))::bigint::text;
+				WHEN 'w' THEN result := result || dow::text;
+				WHEN 'W' THEN result := result || to_char(((doy - 1) + 7 - ((dow + 6) % 7)) / 7, 'FM00');
+				WHEN '%' THEN result := result || '%';
+				ELSE result := result || ch || spec;
+			END CASE;
+			pos := pos + 2;
+		ELSE
+			result := result || ch;
+			pos := pos + 1;
+		END IF;
+	END LOOP;
+
+	RETURN result;
+END;
+$$;
+
+-- strftime(format) resolves the time-value to the current time (as in SQLite)
+CREATE OR REPLACE FUNCTION strftime(p_format text)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+	SELECT strftime_impl(p_format, now(), ARRAY[]::text[])
+$$;
+
+-- strftime(format, text-timevalue, modifiers...)
+CREATE OR REPLACE FUNCTION strftime(p_format text, p_timevalue text, VARIADIC p_modifiers text[] DEFAULT ARRAY[]::text[])
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+	v_ts timestamptz;
+	v_raw text := btrim(p_timevalue);
+	v_mods text[] := p_modifiers;
+BEGIN
+	IF v_raw IS NULL OR v_raw = '' THEN
+		RETURN NULL;
+	END IF;
+
+	IF lower(v_raw) = 'now' THEN
+		v_ts := now();
+	ELSIF v_raw ~ '^-?[0-9]+(\.[0-9]+)?$' THEN
+		IF coalesce(array_length(v_mods, 1), 0) > 0 AND lower(btrim(v_mods[1])) = 'unixepoch' THEN
+			-- unix epoch seconds (consume the modifier)
+			v_ts := to_timestamp(v_raw::numeric);
+			v_mods := coalesce(v_mods[2:], ARRAY[]::text[]);
+		ELSE
+			-- julian day number (SQLite time-value format 12)
+			v_ts := to_timestamp((v_raw::numeric - 2440587.5) * 86400);
+		END IF;
+	ELSIF v_raw ~ '^[0-9]{1,2}:[0-9]{2}(:[0-9]{2}(\.[0-9]+)?)?$' THEN
+		-- time-only value is resolved against the 2000-01-01 base date (as in SQLite)
+		v_ts := ('2000-01-01 ' || v_raw || '+00')::timestamptz;
+	ELSE
+		-- date/datetime string; treat as UTC when no explicit zone offset is present
+		IF v_raw !~ '([zZ]|[+-][0-9]{2}:?[0-9]{2})$' THEN
+			v_raw := v_raw || '+00';
+		END IF;
+		BEGIN
+			v_ts := v_raw::timestamptz;
+		EXCEPTION WHEN others THEN
+			RETURN NULL;
+		END;
+	END IF;
+
+	RETURN strftime_impl(p_format, v_ts, v_mods);
+END;
+$$;
+
+-- strftime(format, numeric-timevalue, modifiers...)
+-- Note: bare numbers are interpreted as Julian day numbers (SQLite time-value
+-- format 12), or as unix epoch seconds when the "unixepoch" modifier is used.
+CREATE OR REPLACE FUNCTION strftime(p_format text, p_timevalue numeric, VARIADIC p_modifiers text[] DEFAULT ARRAY[]::text[])
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+	SELECT strftime(p_format, p_timevalue::text, VARIADIC p_modifiers)
+$$;
+
+-- strftime(format, timestamp-timevalue, modifiers...)
+CREATE OR REPLACE FUNCTION strftime(p_format text, p_timevalue timestamp, VARIADIC p_modifiers text[] DEFAULT ARRAY[]::text[])
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+	SELECT strftime_impl(p_format, p_timevalue::timestamptz, p_modifiers)
+$$;
+
 --
--- Name: "_authOrigins"; Type: TABLE; Schema: public; Owner: user
+-- PostgreSQL database dump
+--
+
+
+-- Dumped from database version 18.6
+-- Dumped by pg_dump version 18.6
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET transaction_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: _authorigins; Type: TABLE; Schema: public; Owner: user
 --
 
 CREATE TABLE public."_authOrigins" (
@@ -123,7 +342,7 @@ CREATE TABLE public._collections (
 ALTER TABLE public._collections OWNER TO "user";
 
 --
--- Name: "_externalAuths"; Type: TABLE; Schema: public; Owner: user
+-- Name: _externalauths; Type: TABLE; Schema: public; Owner: user
 --
 
 CREATE TABLE public."_externalAuths" (
@@ -189,11 +408,12 @@ ALTER TABLE public._otps OWNER TO "user";
 --
 
 CREATE TABLE public._params (
-    created TEXT DEFAULT ''::text NOT NULL,
-    id TEXT DEFAULT '''r''||lower(hex(randomblob(7)))'::text NOT NULL,
-    updated TEXT DEFAULT '' NOT NULL,
-    value TEXT DEFAULT NULL -- Use TEXT because encrypted values are not valid JSON.
+    created text DEFAULT ''::text NOT NULL,
+    id text DEFAULT '''r''||lower(hex(randomblob(7)))'::text NOT NULL,
+    updated text DEFAULT ''::text NOT NULL,
+    value text DEFAULT NULL -- Use TEXT because encrypted values are not valid JSON.
 );
+
 
 ALTER TABLE public._params OWNER TO "user";
 
@@ -325,7 +545,7 @@ ALTER TABLE public.demo4 OWNER TO "user";
 CREATE TABLE public.demo5 (
     created text DEFAULT ''::text,
     id text NOT NULL,
-    rel_many jsonb DEFAULT '[]'::jsonb,
+    rel_many text DEFAULT ''::text,
     rel_one text DEFAULT ''::text,
     select_many text DEFAULT ''::text,
     select_one text DEFAULT ''::text,
@@ -410,7 +630,7 @@ CREATE TABLE public.users (
 ALTER TABLE public.users OWNER TO "user";
 
 --
--- Data for Name: "_authOrigins"; Type: TABLE DATA; Schema: public; Owner: user
+-- Data for Name: _authorigins; Type: TABLE DATA; Schema: public; Owner: user
 --
 
 COPY public."_authOrigins" ("collectionRef", created, fingerprint, id, "recordRef", updated) FROM stdin;
@@ -427,27 +647,27 @@ v851q4r790rhknl	2024-07-26 12:22:37.681Z	22bbbcbed36e25321f384ccf99f60057	9r2j0m
 --
 
 COPY public._collections (id, system, type, name, fields, "listRule", "viewRule", "createRule", "updateRule", "deleteRule", options, created, updated, indexes) FROM stdin;
-_pb_users_auth_	f	auth	users	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"cost":10,"hidden":true,"id":"_pbf_auth_password_","max":0,"min":8,"name":"password","pattern":"","presentable":false,"required":true,"system":true,"type":"password"},{"autogeneratePattern":"[a-zA-Z0-9_]{50}","hidden":true,"id":"_pbf_auth_tokenKey_","max":60,"min":30,"name":"tokenKey","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"exceptDomains":null,"hidden":false,"id":"_pbf_auth_email_","name":"email","onlyDomains":null,"presentable":false,"required":false,"system":true,"type":"email"},{"hidden":false,"id":"_pbf_auth_emailVisibility_","name":"emailVisibility","presentable":false,"required":false,"system":true,"type":"bool"},{"hidden":false,"id":"_pbf_auth_verified_","name":"verified","presentable":false,"required":false,"system":true,"type":"bool"},{"autogeneratePattern":"users[0-9]{5}","hidden":false,"id":"_pbf_auth_username_","max":150,"min":3,"name":"username","pattern":"^[\\\\w][\\\\w\\\\.\\\\-]*$","presentable":false,"primaryKey":false,"required":true,"system":false,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"users_name","max":0,"min":0,"name":"name","pattern":"","presentable":false,"primaryKey":false,"required":false,"system":false,"type":"text"},{"hidden":false,"id":"users_avatar","maxSelect":1,"maxSize":5242880,"mimeTypes":["image/jpg","image/jpeg","image/png","image/svg+xml","image/gif"],"name":"avatar","presentable":false,"protected":false,"required":false,"system":false,"thumbs":["70x50","70x50t","70x50b","70x50f","0x50","70x0"],"type":"file"},{"hidden":false,"id":"xtecur3m","maxSelect":5,"maxSize":5242880,"mimeTypes":null,"name":"file","presentable":false,"protected":false,"required":false,"system":false,"thumbs":null,"type":"file"},{"cascadeDelete":false,"collectionId":"sz5l5z67tg7gku0","hidden":false,"id":"lkeigvv3","maxSelect":1,"minSelect":0,"name":"rel","presentable":false,"required":false,"system":false,"type":"relation"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]	\N	id = @request.auth.id		id = @request.auth.id	id = @request.auth.id	{"authRule":"","manageRule":null,"authAlert":{"enabled":true,"emailTemplate":{"subject":"Login from a new location","body":"\\u003cp\\u003eHello {RECORD:name}{RECORD:tokenKey},\\u003c/p\\u003e\\n\\u003cp\\u003eWe noticed a login to your {APP_NAME} account from a new location:\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cem\\u003e{ALERT_INFO}\\u003c/em\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003eIf this was you, you may disregard this email.\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cstrong\\u003eIf this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"oauth2":{"providers":[{"pkce":null,"name":"gitlab","clientId":"test1","clientSecret":"test2","authURL":"","tokenURL":"","userInfoURL":"","displayName":"","extra":null},{"pkce":null,"name":"google","clientId":"test","clientSecret":"test2","authURL":"","tokenURL":"","userInfoURL":"","displayName":"","extra":null}],"mappedFields":{"id":"","name":"","username":"username","avatarURL":""},"enabled":true},"passwordAuth":{"enabled":true,"identityFields":["email","username"]},"mfa":{"enabled":true,"duration":1800,"rule":""},"otp":{"enabled":true,"duration":300,"length":8,"emailTemplate":{"subject":"OTP for {APP_NAME}","body":"\\u003cp\\u003eHello {RECORD:name}{RECORD:tokenKey},\\u003c/p\\u003e\\n\\u003cp\\u003eYour one-time password is: \\u003cstrong\\u003e{OTP}\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask for the one-time password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"authToken":{"secret":"PjVU4hAV7CZIWbCByJHkDcMUlSEWCLI6M5aWSZOpEq0a3rYxKT","duration":1209600},"passwordResetToken":{"secret":"BC6jYPe4JXpQGGNzu6VXtYw0yhKoH2mh2ezIJClOJQuZYrd4Ol","duration":1800},"emailChangeToken":{"secret":"eON2TTJZiGCEi7mvUvwMLADj8CMHQzwZN3gmyMjQb24EY08ATP","duration":1800},"verificationToken":{"secret":"dgGGHlzzdCJ2C5MjXGoondllwSXkJHyL50FuvLvXGHNmBhvGKO","duration":604800},"fileToken":{"secret":"4Ax9zDm2Rwtny81dGaGQrJQBnIx5wVOuNe89X6v7NbNzrAZhvn","duration":180},"verificationTemplate":{"subject":"Verify your {APP_NAME} email","body":"\\u003cp\\u003eHello {RECORD:name}{RECORD:tokenKey},\\u003c/p\\u003e\\n\\u003cp\\u003eThank you for joining us at {APP_NAME}.\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to verify your email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eVerify\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"resetPasswordTemplate":{"subject":"Reset your {APP_NAME} password","body":"\\u003cp\\u003eHello {RECORD:name}{RECORD:tokenKey},\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to reset your password.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eReset password\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to reset your password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"confirmEmailChangeTemplate":{"subject":"Confirm your {APP_NAME} new email address","body":"\\u003cp\\u003eHello {RECORD:name}{RECORD:tokenKey},\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to confirm your new email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eConfirm new email\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to change your email address, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}}	2022-10-10 09:49:46.145Z	2025-11-10 15:33:37.841Z	["CREATE UNIQUE INDEX \\"__pb_users_auth__username_idx\\" ON \\"users\\" (username)","CREATE UNIQUE INDEX \\"__pb_users_auth__email_idx\\" ON \\"users\\" (email) WHERE email != ''","CREATE UNIQUE INDEX \\"__pb_users_auth__tokenKey_idx\\" ON \\"users\\" (\\"tokenKey\\")","CREATE INDEX \\"__pb_users_auth__created_idx\\" ON \\"users\\" (\\"created\\")"]
-wsmn24bux7wo113	f	base	demo1	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"u7spsiph","max":0,"min":0,"name":"text","pattern":"","presentable":false,"primaryKey":false,"required":false,"system":false,"type":"text"},{"hidden":false,"id":"puk534el","name":"bool","presentable":false,"required":false,"system":false,"type":"bool"},{"exceptDomains":null,"hidden":false,"id":"ktas5n7b","name":"url","onlyDomains":null,"presentable":false,"required":false,"system":false,"type":"url"},{"hidden":false,"id":"dc4abz4i","maxSelect":1,"name":"select_one","presentable":false,"required":false,"system":false,"type":"select","values":["optionA","optionB","optionC"]},{"hidden":false,"id":"owtlq7zl","maxSelect":3,"name":"select_many","presentable":false,"required":false,"system":false,"type":"select","values":["optionA","optionB","optionC"]},{"hidden":false,"id":"4ulkdevf","maxSelect":1,"maxSize":5242880,"mimeTypes":null,"name":"file_one","presentable":false,"protected":true,"required":false,"system":false,"thumbs":null,"type":"file"},{"hidden":false,"id":"fjzhrsvq","maxSelect":99,"maxSize":5242880,"mimeTypes":null,"name":"file_many","presentable":false,"protected":false,"required":false,"system":false,"thumbs":null,"type":"file"},{"hidden":false,"id":"1z1ld0i5","max":null,"min":null,"name":"number","onlyInt":false,"presentable":false,"required":false,"system":false,"type":"number"},{"exceptDomains":null,"hidden":false,"id":"khvhpwgj","name":"email","onlyDomains":null,"presentable":false,"required":false,"system":false,"type":"email"},{"hidden":false,"id":"ro6p02gk","max":"","min":"","name":"datetime","presentable":false,"required":false,"system":false,"type":"date"},{"hidden":false,"id":"ei2fg4v1","maxSize":5242880,"name":"json","presentable":false,"required":false,"system":false,"type":"json"},{"cascadeDelete":false,"collectionId":"wsmn24bux7wo113","hidden":false,"id":"zaedritp","maxSelect":1,"minSelect":0,"name":"rel_one","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":true,"collectionId":"_pb_users_auth_","hidden":false,"id":"t9bpk2ug","maxSelect":9999,"minSelect":0,"name":"rel_many","presentable":false,"required":false,"system":false,"type":"relation"},{"hidden":false,"id":"geoPoint3081106212","name":"point","presentable":false,"required":false,"system":false,"type":"geoPoint"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]	\N	\N	\N	\N	\N	{}	2022-10-10 09:51:19.868Z	2025-04-02 11:04:29.260Z	["CREATE INDEX \\"_wsmn24bux7wo113_created_idx\\" ON \\"demo1\\" (\\"created\\")"]
-sz5l5z67tg7gku0	f	base	demo2	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"mkrguaaf","max":0,"min":2,"name":"title","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":false,"type":"text"},{"hidden":false,"id":"izkl5z2s","name":"active","presentable":false,"required":false,"system":false,"type":"bool"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]						{}	2022-10-10 09:51:28.452Z	2023-03-20 16:39:25.211Z	["CREATE INDEX \\"idx_demo2_created\\" ON \\"demo2\\" (\\"created\\")","CREATE UNIQUE INDEX \\"idx_unique_demo2_title\\" on \\"demo2\\" (\\"title\\")","CREATE INDEX \\"idx_demo2_active\\" ON \\"demo2\\" (\\n\\"active\\"\\n)"]
-wzlqyes4orhoygb	f	base	demo3	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"w5z2x0nq","max":0,"min":0,"name":"title","pattern":"","presentable":true,"primaryKey":false,"required":false,"system":false,"type":"text"},{"hidden":false,"id":"tgqrbwio","maxSelect":99,"maxSize":5242880,"mimeTypes":null,"name":"files","presentable":false,"protected":false,"required":false,"system":false,"thumbs":null,"type":"file"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]	@request.auth.id != "" && @request.auth.collectionName != "users"	@request.auth.id != "" && @request.auth.collectionName != "users"	@request.auth.id != "" && @request.auth.collectionName != "users"	@request.auth.id != "" && @request.auth.collectionName != "users"	@request.auth.id != "" && @request.auth.collectionName != "users"	{}	2022-10-10 09:51:36.853Z	2023-11-20 18:26:53.176Z	["CREATE INDEX \\"_wzlqyes4orhoygb_created_idx\\" ON \\"demo3\\" (\\"created\\")"]
-4d1blo5cuycfaca	f	base	demo4	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"erkxnabw","max":0,"min":0,"name":"title","pattern":"","presentable":false,"primaryKey":false,"required":false,"system":false,"type":"text"},{"cascadeDelete":false,"collectionId":"wzlqyes4orhoygb","hidden":false,"id":"t5jskeyz","maxSelect":1,"minSelect":0,"name":"rel_one_no_cascade","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"wzlqyes4orhoygb","hidden":false,"id":"ldrcjhk8","maxSelect":1,"minSelect":0,"name":"rel_one_no_cascade_required","presentable":false,"required":true,"system":false,"type":"relation"},{"cascadeDelete":true,"collectionId":"wzlqyes4orhoygb","hidden":false,"id":"pl5lcd4y","maxSelect":1,"minSelect":0,"name":"rel_one_cascade","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"wzlqyes4orhoygb","hidden":false,"id":"jz0oue3z","maxSelect":999,"minSelect":0,"name":"rel_many_no_cascade","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"wzlqyes4orhoygb","hidden":false,"id":"bsxyqrhb","maxSelect":999,"minSelect":0,"name":"rel_many_no_cascade_required","presentable":false,"required":true,"system":false,"type":"relation"},{"cascadeDelete":true,"collectionId":"wzlqyes4orhoygb","hidden":false,"id":"kwmchnf7","maxSelect":999,"minSelect":0,"name":"rel_many_cascade","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"wzlqyes4orhoygb","hidden":false,"id":"pmynkqk5","maxSelect":1,"minSelect":0,"name":"rel_one_unique","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"wzlqyes4orhoygb","hidden":false,"id":"mjzyk9vb","maxSelect":999,"minSelect":0,"name":"rel_many_unique","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"4d1blo5cuycfaca","hidden":false,"id":"dagiyxj4","maxSelect":1,"minSelect":0,"name":"self_rel_one","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"4d1blo5cuycfaca","hidden":false,"id":"tsrki8kc","maxSelect":999,"minSelect":0,"name":"self_rel_many","presentable":false,"required":false,"system":false,"type":"relation"},{"hidden":false,"id":"4wpx0hhx","maxSize":5242880,"name":"json_array","presentable":false,"required":false,"system":false,"type":"json"},{"hidden":false,"id":"ufpwiqnx","maxSize":5242880,"name":"json_object","presentable":false,"required":false,"system":false,"type":"json"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]			@request.auth.collectionName = 'users'	@request.auth.collectionName = 'users'		{}	2022-10-10 09:51:47.770Z	2024-09-01 12:15:28.332Z	["CREATE INDEX \\"_4d1blo5cuycfaca_created_idx\\" ON \\"demo4\\" (\\"created\\")","CREATE UNIQUE INDEX \\"idx_luoQV2A\\" ON \\"demo4\\" (\\"rel_one_unique\\") WHERE rel_one_unique != ''","CREATE UNIQUE INDEX \\"idx_IjL94ze\\" ON \\"demo4\\" ((\\"rel_many_unique\\" #>> '{}')) WHERE rel_many_unique::text != '[]'"]
-v851q4r790rhknl	f	auth	clients	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"cost":10,"hidden":true,"id":"_pbf_auth_password_","max":0,"min":8,"name":"password","pattern":"","presentable":false,"required":true,"system":true,"type":"password"},{"autogeneratePattern":"[a-zA-Z0-9_]{50}","hidden":true,"id":"_pbf_auth_tokenKey_","max":60,"min":30,"name":"tokenKey","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"exceptDomains":null,"hidden":false,"id":"_pbf_auth_email_","name":"email","onlyDomains":null,"presentable":false,"required":true,"system":true,"type":"email"},{"hidden":false,"id":"_pbf_auth_emailVisibility_","name":"emailVisibility","presentable":false,"required":false,"system":true,"type":"bool"},{"hidden":false,"id":"_pbf_auth_verified_","name":"verified","presentable":false,"required":false,"system":true,"type":"bool"},{"autogeneratePattern":"users[0-9]{5}","hidden":false,"id":"_pbf_auth_username_","max":150,"min":3,"name":"username","pattern":"^[\\\\w][\\\\w\\\\.\\\\-]*$","presentable":false,"primaryKey":false,"required":true,"system":false,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"lacorw19","max":0,"min":0,"name":"name","pattern":"","presentable":false,"primaryKey":false,"required":false,"system":false,"type":"text"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]	\N	\N	\N	\N	\N	{"authRule":"verified=true","manageRule":null,"authAlert":{"enabled":true,"emailTemplate":{"subject":"Login from a new location","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eWe noticed a login to your {APP_NAME} account from a new location:\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cem\\u003e{ALERT_INFO}\\u003c/em\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cstrong\\u003eIf this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003eIf this was you, you may disregard this email.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"oauth2":{"providers":[],"mappedFields":{"id":"","name":"","username":"username","avatarURL":""},"enabled":false},"passwordAuth":{"enabled":true,"identityFields":["email","username"]},"mfa":{"enabled":false,"duration":1800,"rule":""},"otp":{"enabled":false,"duration":300,"length":8,"emailTemplate":{"subject":"OTP for {APP_NAME}","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eYour one-time password is: \\u003cstrong\\u003e{OTP}\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask for the one-time password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"authToken":{"secret":"PjVU4hAV7CZIWbCByJHkDcMUlSEWCLI6M5aWSZOpEq0a3rYxKT","duration":1209600},"passwordResetToken":{"secret":"BC6jYPe4JXpQGGNzu6VXtYw0yhKoH2mh2ezIJClOJQuZYrd4Ol","duration":1800},"emailChangeToken":{"secret":"eON2TTJZiGCEi7mvUvwMLADj8CMHQzwZN3gmyMjQb24EY08ATP","duration":1800},"verificationToken":{"secret":"dgGGHlzzdCJ2C5MjXGoondllwSXkJHyL50FuvLvXGHNmBhvGKO","duration":604800},"fileToken":{"secret":"4Ax9zDm2Rwtny81dGaGQrJQBnIx5wVOuNe89X6v7NbNzrAZhvn","duration":180},"verificationTemplate":{"subject":"Verify your {APP_NAME} email","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eThank you for joining us at {APP_NAME}.\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to verify your email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eVerify\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"resetPasswordTemplate":{"subject":"Reset your {APP_NAME} password","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to reset your password.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eReset password\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to reset your password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"confirmEmailChangeTemplate":{"subject":"Confirm your {APP_NAME} new email address","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to confirm your new email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eConfirm new email\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to change your email address, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}}	2022-10-11 09:41:36.712Z	2025-11-10 15:33:30.519Z	["CREATE UNIQUE INDEX \\"_v851q4r790rhknl_username_idx\\" ON \\"clients\\" (username)","CREATE UNIQUE INDEX \\"_v851q4r790rhknl_email_idx\\" ON \\"clients\\" (email) WHERE email != ''","CREATE UNIQUE INDEX \\"_v851q4r790rhknl_tokenKey_idx\\" ON \\"clients\\" (\\"tokenKey\\")","CREATE INDEX \\"_v851q4r790rhknl_created_idx\\" ON \\"clients\\" (\\"created\\")"]
-kpv709sk2lqbqk8	t	auth	nologin	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"cost":10,"hidden":true,"id":"_pbf_auth_password_","max":0,"min":8,"name":"password","pattern":"","presentable":false,"required":true,"system":true,"type":"password"},{"autogeneratePattern":"[a-zA-Z0-9_]{50}","hidden":true,"id":"_pbf_auth_tokenKey_","max":60,"min":30,"name":"tokenKey","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"exceptDomains":null,"hidden":false,"id":"_pbf_auth_email_","name":"email","onlyDomains":null,"presentable":false,"required":true,"system":true,"type":"email"},{"hidden":false,"id":"_pbf_auth_emailVisibility_","name":"emailVisibility","presentable":false,"required":false,"system":true,"type":"bool"},{"hidden":false,"id":"_pbf_auth_verified_","name":"verified","presentable":false,"required":false,"system":true,"type":"bool"},{"autogeneratePattern":"users[0-9]{5}","hidden":false,"id":"_pbf_auth_username_","max":150,"min":3,"name":"username","pattern":"^[\\\\w][\\\\w\\\\.\\\\-]*$","presentable":false,"primaryKey":false,"required":true,"system":false,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"x8zzktwe","max":0,"min":0,"name":"name","pattern":"","presentable":false,"primaryKey":false,"required":false,"system":false,"type":"text"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]						{"authRule":"","manageRule":"@request.auth.collectionName = 'users'","authAlert":{"enabled":true,"emailTemplate":{"subject":"Login from a new location","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eWe noticed a login to your {APP_NAME} account from a new location:\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cem\\u003e{ALERT_INFO}\\u003c/em\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cstrong\\u003eIf this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003eIf this was you, you may disregard this email.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"oauth2":{"providers":[{"pkce":null,"name":"gitlab","clientId":"test","clientSecret":"test","authURL":"","tokenURL":"","userInfoURL":"","displayName":"","extra":null}],"mappedFields":{"id":"","name":"","username":"username","avatarURL":""},"enabled":false},"passwordAuth":{"enabled":false,"identityFields":["email"]},"mfa":{"enabled":false,"duration":1800,"rule":""},"otp":{"enabled":false,"duration":300,"length":8,"emailTemplate":{"subject":"OTP for {APP_NAME}","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eYour one-time password is: \\u003cstrong\\u003e{OTP}\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask for the one-time password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"authToken":{"secret":"PjVU4hAV7CZIWbCByJHkDcMUlSEWCLI6M5aWSZOpEq0a3rYxKT","duration":1209600},"passwordResetToken":{"secret":"BC6jYPe4JXpQGGNzu6VXtYw0yhKoH2mh2ezIJClOJQuZYrd4Ol","duration":1800},"emailChangeToken":{"secret":"eON2TTJZiGCEi7mvUvwMLADj8CMHQzwZN3gmyMjQb24EY08ATP","duration":1800},"verificationToken":{"secret":"dgGGHlzzdCJ2C5MjXGoondllwSXkJHyL50FuvLvXGHNmBhvGKO","duration":604800},"fileToken":{"secret":"4Ax9zDm2Rwtny81dGaGQrJQBnIx5wVOuNe89X6v7NbNzrAZhvn","duration":180},"verificationTemplate":{"subject":"Verify your {APP_NAME} email","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eThank you for joining us at {APP_NAME}.\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to verify your email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eVerify\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"resetPasswordTemplate":{"subject":"Reset your {APP_NAME} password","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to reset your password.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eReset password\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to reset your password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"confirmEmailChangeTemplate":{"subject":"Confirm your {APP_NAME} new email address","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to confirm your new email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eConfirm new email\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to change your email address, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}}	2022-10-12 10:39:21.294Z	2025-11-10 15:34:06.288Z	["CREATE UNIQUE INDEX \\"_kpv709sk2lqbqk8_username_idx\\" ON \\"nologin\\" (username)","CREATE UNIQUE INDEX \\"_kpv709sk2lqbqk8_email_idx\\" ON \\"nologin\\" (email) WHERE email != ''","CREATE UNIQUE INDEX \\"_kpv709sk2lqbqk8_tokenKey_idx\\" ON \\"nologin\\" (\\"tokenKey\\")","CREATE INDEX \\"_kpv709sk2lqbqk8_created_idx\\" ON \\"nologin\\" (\\"created\\")"]
-9n89pl5vkct6330	f	base	demo5	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"hidden":false,"id":"sozvpexq","maxSelect":1,"name":"select_one","presentable":false,"required":false,"system":false,"type":"select","values":["a","b","c","d"]},{"hidden":false,"id":"qlq1nxlc","maxSelect":5,"name":"select_many","presentable":false,"required":false,"system":false,"type":"select","values":["a","b","c","d","e"]},{"cascadeDelete":false,"collectionId":"4d1blo5cuycfaca","hidden":false,"id":"ajrrsq1a","maxSelect":1,"minSelect":0,"name":"rel_one","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"4d1blo5cuycfaca","hidden":false,"id":"soxhs0ou","maxSelect":5,"minSelect":0,"name":"rel_many","presentable":false,"required":false,"system":false,"type":"relation"},{"hidden":false,"id":"kvbyzuqj","max":null,"min":null,"name":"total","onlyInt":false,"presentable":false,"required":false,"system":false,"type":"number"},{"hidden":false,"id":"ob7dsrcl","maxSelect":1,"maxSize":5242880,"mimeTypes":null,"name":"file","presentable":false,"protected":false,"required":false,"system":false,"thumbs":null,"type":"file"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]	select_many:length = 3	rel_many.self_rel_many.rel_many_cascade.files:length = 1	@request.body.total = 3	@request.body.total = 3	@request.query.test:isset = true	{}	2023-01-07 13:13:08.733Z	2023-04-04 13:10:52.723Z	["CREATE INDEX \\"_9n89pl5vkct6330_created_idx\\" ON \\"demo5\\" (\\"created\\")"]
+_pb_users_auth_	f	auth	users	[{"autogeneratePattern":"[a-z0-9]{15}","help":"","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"cost":10,"help":"","hidden":true,"id":"_pbf_auth_password_","max":0,"min":8,"name":"password","pattern":"","presentable":false,"required":true,"system":true,"type":"password"},{"autogeneratePattern":"[a-zA-Z0-9_]{50}","help":"","hidden":true,"id":"_pbf_auth_tokenKey_","max":60,"min":30,"name":"tokenKey","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"exceptDomains":null,"help":"","hidden":false,"id":"_pbf_auth_email_","name":"email","onlyDomains":null,"presentable":false,"required":false,"system":true,"type":"email"},{"help":"","hidden":false,"id":"_pbf_auth_emailVisibility_","name":"emailVisibility","presentable":false,"required":false,"system":true,"type":"bool"},{"help":"","hidden":false,"id":"_pbf_auth_verified_","name":"verified","presentable":false,"required":false,"system":true,"type":"bool"},{"autogeneratePattern":"users[0-9]{5}","help":"","hidden":false,"id":"_pbf_auth_username_","max":150,"min":3,"name":"username","pattern":"^[\\\\w][\\\\w\\\\.\\\\-]*$","presentable":false,"primaryKey":false,"required":true,"system":false,"type":"text"},{"autogeneratePattern":"","help":"","hidden":false,"id":"users_name","max":0,"min":0,"name":"name","pattern":"","presentable":false,"primaryKey":false,"required":false,"system":false,"type":"text"},{"help":"","hidden":false,"id":"users_avatar","maxSelect":1,"maxSize":5242880,"mimeTypes":["image/jpg","image/jpeg","image/png","image/svg+xml","image/gif"],"name":"avatar","presentable":false,"protected":false,"required":false,"system":false,"thumbs":["70x50","70x50t","70x50b","70x50f","0x50","70x0"],"type":"file"},{"help":"","hidden":false,"id":"xtecur3m","maxSelect":5,"maxSize":5242880,"mimeTypes":null,"name":"file","presentable":false,"protected":false,"required":false,"system":false,"thumbs":null,"type":"file"},{"cascadeDelete":false,"collectionId":"sz5l5z67tg7gku0","help":"","hidden":false,"id":"lkeigvv3","maxSelect":1,"minSelect":0,"name":"rel","presentable":false,"required":false,"system":false,"type":"relation"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]	\N	id = @request.auth.id		id = @request.auth.id	id = @request.auth.id	{"authRule":"","manageRule":null,"authAlert":{"enabled":true,"emailTemplate":{"subject":"Login from a new location","body":"\\u003cp\\u003eHello {RECORD:name}{RECORD:tokenKey},\\u003c/p\\u003e\\n\\u003cp\\u003eWe noticed a login to your {APP_NAME} account from a new location:\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cem\\u003e{ALERT_INFO}\\u003c/em\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003eIf this was you, you may disregard this email.\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cstrong\\u003eIf this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"oauth2":{"providers":[{"pkce":null,"name":"gitlab","clientId":"test1","clientSecret":"test2","authURL":"","tokenURL":"","userInfoURL":"","displayName":"","extra":null},{"pkce":null,"name":"google","clientId":"test","clientSecret":"test2","authURL":"","tokenURL":"","userInfoURL":"","displayName":"","extra":null}],"mappedFields":{"id":"","name":"","username":"username","avatarURL":""},"enabled":true},"passwordAuth":{"enabled":true,"identityFields":["email","username"]},"mfa":{"enabled":true,"duration":1800,"rule":""},"otp":{"enabled":true,"duration":300,"length":8,"emailTemplate":{"subject":"OTP for {APP_NAME}","body":"\\u003cp\\u003eHello {RECORD:name}{RECORD:tokenKey},\\u003c/p\\u003e\\n\\u003cp\\u003eYour one-time password is: \\u003cstrong\\u003e{OTP}\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask for the one-time password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"authToken":{"secret":"PjVU4hAV7CZIWbCByJHkDcMUlSEWCLI6M5aWSZOpEq0a3rYxKT","duration":1209600},"passwordResetToken":{"secret":"BC6jYPe4JXpQGGNzu6VXtYw0yhKoH2mh2ezIJClOJQuZYrd4Ol","duration":1800},"emailChangeToken":{"secret":"eON2TTJZiGCEi7mvUvwMLADj8CMHQzwZN3gmyMjQb24EY08ATP","duration":1800},"verificationToken":{"secret":"dgGGHlzzdCJ2C5MjXGoondllwSXkJHyL50FuvLvXGHNmBhvGKO","duration":604800},"fileToken":{"secret":"4Ax9zDm2Rwtny81dGaGQrJQBnIx5wVOuNe89X6v7NbNzrAZhvn","duration":180},"verificationTemplate":{"subject":"Verify your {APP_NAME} email","body":"\\u003cp\\u003eHello {RECORD:name}{RECORD:tokenKey},\\u003c/p\\u003e\\n\\u003cp\\u003eThank you for joining us at {APP_NAME}.\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to verify your email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eVerify\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"resetPasswordTemplate":{"subject":"Reset your {APP_NAME} password","body":"\\u003cp\\u003eHello {RECORD:name}{RECORD:tokenKey},\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to reset your password.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eReset password\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to reset your password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"confirmEmailChangeTemplate":{"subject":"Confirm your {APP_NAME} new email address","body":"\\u003cp\\u003eHello {RECORD:name}{RECORD:tokenKey},\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to confirm your new email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eConfirm new email\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to change your email address, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}}	2022-10-10 09:49:46.145Z	2026-05-14 18:14:18.378Z	["CREATE UNIQUE INDEX `__pb_users_auth__username_idx` ON `users` (username)","CREATE UNIQUE INDEX `__pb_users_auth__email_idx` ON `users` (email) WHERE email != ''","CREATE UNIQUE INDEX `__pb_users_auth__tokenKey_idx` ON `users` (tokenKey)","CREATE INDEX `__pb_users_auth__created_idx` ON `users` (`created`)"]
+wsmn24bux7wo113	f	base	demo1	[{"autogeneratePattern":"[a-z0-9]{15}","help":"","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","help":"","hidden":false,"id":"u7spsiph","max":0,"min":0,"name":"text","pattern":"","presentable":false,"primaryKey":false,"required":false,"system":false,"type":"text"},{"help":"","hidden":false,"id":"puk534el","name":"bool","presentable":false,"required":false,"system":false,"type":"bool"},{"exceptDomains":null,"help":"","hidden":false,"id":"ktas5n7b","name":"url","onlyDomains":null,"presentable":false,"required":false,"system":false,"type":"url"},{"help":"","hidden":false,"id":"dc4abz4i","maxSelect":1,"name":"select_one","presentable":false,"required":false,"system":false,"type":"select","values":["optionA","optionB","optionC"]},{"help":"","hidden":false,"id":"owtlq7zl","maxSelect":3,"name":"select_many","presentable":false,"required":false,"system":false,"type":"select","values":["optionA","optionB","optionC"]},{"help":"","hidden":false,"id":"4ulkdevf","maxSelect":1,"maxSize":5242880,"mimeTypes":null,"name":"file_one","presentable":false,"protected":true,"required":false,"system":false,"thumbs":null,"type":"file"},{"help":"","hidden":false,"id":"fjzhrsvq","maxSelect":99,"maxSize":5242880,"mimeTypes":null,"name":"file_many","presentable":false,"protected":false,"required":false,"system":false,"thumbs":null,"type":"file"},{"help":"","hidden":false,"id":"1z1ld0i5","max":null,"min":null,"name":"number","onlyInt":false,"presentable":false,"required":false,"system":false,"type":"number"},{"exceptDomains":null,"help":"","hidden":false,"id":"khvhpwgj","name":"email","onlyDomains":null,"presentable":false,"required":false,"system":false,"type":"email"},{"help":"","hidden":false,"id":"ro6p02gk","max":"","min":"","name":"datetime","presentable":false,"required":false,"system":false,"type":"date"},{"help":"","hidden":false,"id":"ei2fg4v1","maxSize":5242880,"name":"json","presentable":false,"required":false,"system":false,"type":"json"},{"cascadeDelete":false,"collectionId":"wsmn24bux7wo113","help":"","hidden":false,"id":"zaedritp","maxSelect":1,"minSelect":0,"name":"rel_one","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":true,"collectionId":"_pb_users_auth_","help":"","hidden":false,"id":"t9bpk2ug","maxSelect":9999,"minSelect":0,"name":"rel_many","presentable":false,"required":false,"system":false,"type":"relation"},{"help":"","hidden":false,"id":"geoPoint3081106212","name":"point","presentable":false,"required":false,"system":false,"type":"geoPoint"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]	\N	\N	\N	\N	\N	{}	2022-10-10 09:51:19.868Z	2026-05-14 18:14:18.425Z	["CREATE INDEX `_wsmn24bux7wo113_created_idx` ON `demo1` (`created`)"]
+sz5l5z67tg7gku0	f	base	demo2	[{"autogeneratePattern":"[a-z0-9]{15}","help":"","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","help":"","hidden":false,"id":"mkrguaaf","max":0,"min":2,"name":"title","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":false,"type":"text"},{"help":"","hidden":false,"id":"izkl5z2s","name":"active","presentable":false,"required":false,"system":false,"type":"bool"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]						{}	2022-10-10 09:51:28.452Z	2026-05-14 18:14:18.462Z	["CREATE INDEX `idx_demo2_created` ON `demo2` (`created`)","CREATE UNIQUE INDEX \\"idx_unique_demo2_title\\" on \\"demo2\\" (\\"title\\")","CREATE INDEX \\"idx_demo2_active\\" ON \\"demo2\\" (\\n\\"active\\"\\n)"]
+wzlqyes4orhoygb	f	base	demo3	[{"autogeneratePattern":"[a-z0-9]{15}","help":"","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","help":"","hidden":false,"id":"w5z2x0nq","max":0,"min":0,"name":"title","pattern":"","presentable":true,"primaryKey":false,"required":false,"system":false,"type":"text"},{"help":"","hidden":false,"id":"tgqrbwio","maxSelect":99,"maxSize":5242880,"mimeTypes":null,"name":"files","presentable":false,"protected":false,"required":false,"system":false,"thumbs":null,"type":"file"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]	// example leading comment...\n@request.auth.id != "" && @request.auth.collectionName != "users"\n// example trailing comment...	@request.auth.id != "" && @request.auth.collectionName != "users"	@request.auth.id != "" && @request.auth.collectionName != "users"	@request.auth.id != "" && @request.auth.collectionName != "users"	@request.auth.id != "" && @request.auth.collectionName != "users"	{}	2022-10-10 09:51:36.853Z	2026-05-14 18:14:18.495Z	["CREATE INDEX `_wzlqyes4orhoygb_created_idx` ON `demo3` (`created`)"]
+4d1blo5cuycfaca	f	base	demo4	[{"autogeneratePattern":"[a-z0-9]{15}","help":"","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","help":"","hidden":false,"id":"erkxnabw","max":0,"min":0,"name":"title","pattern":"","presentable":false,"primaryKey":false,"required":false,"system":false,"type":"text"},{"cascadeDelete":false,"collectionId":"wzlqyes4orhoygb","help":"","hidden":false,"id":"t5jskeyz","maxSelect":1,"minSelect":0,"name":"rel_one_no_cascade","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"wzlqyes4orhoygb","help":"","hidden":false,"id":"ldrcjhk8","maxSelect":1,"minSelect":0,"name":"rel_one_no_cascade_required","presentable":false,"required":true,"system":false,"type":"relation"},{"cascadeDelete":true,"collectionId":"wzlqyes4orhoygb","help":"","hidden":false,"id":"pl5lcd4y","maxSelect":1,"minSelect":0,"name":"rel_one_cascade","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"wzlqyes4orhoygb","help":"","hidden":false,"id":"jz0oue3z","maxSelect":999,"minSelect":0,"name":"rel_many_no_cascade","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"wzlqyes4orhoygb","help":"","hidden":false,"id":"bsxyqrhb","maxSelect":999,"minSelect":0,"name":"rel_many_no_cascade_required","presentable":false,"required":true,"system":false,"type":"relation"},{"cascadeDelete":true,"collectionId":"wzlqyes4orhoygb","help":"","hidden":false,"id":"kwmchnf7","maxSelect":999,"minSelect":0,"name":"rel_many_cascade","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"wzlqyes4orhoygb","help":"","hidden":false,"id":"pmynkqk5","maxSelect":1,"minSelect":0,"name":"rel_one_unique","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"wzlqyes4orhoygb","help":"","hidden":false,"id":"mjzyk9vb","maxSelect":999,"minSelect":0,"name":"rel_many_unique","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"4d1blo5cuycfaca","help":"","hidden":false,"id":"dagiyxj4","maxSelect":1,"minSelect":0,"name":"self_rel_one","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"4d1blo5cuycfaca","help":"","hidden":false,"id":"tsrki8kc","maxSelect":999,"minSelect":0,"name":"self_rel_many","presentable":false,"required":false,"system":false,"type":"relation"},{"help":"","hidden":false,"id":"4wpx0hhx","maxSize":5242880,"name":"json_array","presentable":false,"required":false,"system":false,"type":"json"},{"help":"","hidden":false,"id":"ufpwiqnx","maxSize":5242880,"name":"json_object","presentable":false,"required":false,"system":false,"type":"json"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]			@request.auth.collectionName = 'users'	@request.auth.collectionName = 'users'		{}	2022-10-10 09:51:47.770Z	2026-05-14 18:14:18.525Z	["CREATE INDEX `_4d1blo5cuycfaca_created_idx` ON `demo4` (`created`)","CREATE UNIQUE INDEX `idx_luoQV2A` ON `demo4` (`rel_one_unique`) WHERE rel_one_unique != ''","CREATE UNIQUE INDEX `idx_IjL94ze` ON `demo4` (`rel_many_unique`) WHERE rel_many_unique != '[]'"]
+v851q4r790rhknl	f	auth	clients	[{"autogeneratePattern":"[a-z0-9]{15}","help":"","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"cost":10,"help":"","hidden":true,"id":"_pbf_auth_password_","max":0,"min":8,"name":"password","pattern":"","presentable":false,"required":true,"system":true,"type":"password"},{"autogeneratePattern":"[a-zA-Z0-9_]{50}","help":"","hidden":true,"id":"_pbf_auth_tokenKey_","max":60,"min":30,"name":"tokenKey","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"exceptDomains":null,"help":"","hidden":false,"id":"_pbf_auth_email_","name":"email","onlyDomains":null,"presentable":false,"required":true,"system":true,"type":"email"},{"help":"","hidden":false,"id":"_pbf_auth_emailVisibility_","name":"emailVisibility","presentable":false,"required":false,"system":true,"type":"bool"},{"help":"","hidden":false,"id":"_pbf_auth_verified_","name":"verified","presentable":false,"required":false,"system":true,"type":"bool"},{"autogeneratePattern":"users[0-9]{5}","help":"","hidden":false,"id":"_pbf_auth_username_","max":150,"min":3,"name":"username","pattern":"^[\\\\w][\\\\w\\\\.\\\\-]*$","presentable":false,"primaryKey":false,"required":true,"system":false,"type":"text"},{"autogeneratePattern":"","help":"","hidden":false,"id":"lacorw19","max":0,"min":0,"name":"name","pattern":"","presentable":false,"primaryKey":false,"required":false,"system":false,"type":"text"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]	\N	\N	\N	\N	\N	{"authRule":"verified=true","manageRule":null,"authAlert":{"enabled":true,"emailTemplate":{"subject":"Login from a new location","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eWe noticed a login to your {APP_NAME} account from a new location:\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cem\\u003e{ALERT_INFO}\\u003c/em\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cstrong\\u003eIf this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003eIf this was you, you may disregard this email.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"oauth2":{"providers":[],"mappedFields":{"id":"","name":"","username":"username","avatarURL":""},"enabled":false},"passwordAuth":{"enabled":true,"identityFields":["email","username"]},"mfa":{"enabled":false,"duration":1800,"rule":""},"otp":{"enabled":false,"duration":300,"length":8,"emailTemplate":{"subject":"OTP for {APP_NAME}","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eYour one-time password is: \\u003cstrong\\u003e{OTP}\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask for the one-time password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"authToken":{"secret":"PjVU4hAV7CZIWbCByJHkDcMUlSEWCLI6M5aWSZOpEq0a3rYxKT","duration":1209600},"passwordResetToken":{"secret":"BC6jYPe4JXpQGGNzu6VXtYw0yhKoH2mh2ezIJClOJQuZYrd4Ol","duration":1800},"emailChangeToken":{"secret":"eON2TTJZiGCEi7mvUvwMLADj8CMHQzwZN3gmyMjQb24EY08ATP","duration":1800},"verificationToken":{"secret":"dgGGHlzzdCJ2C5MjXGoondllwSXkJHyL50FuvLvXGHNmBhvGKO","duration":604800},"fileToken":{"secret":"4Ax9zDm2Rwtny81dGaGQrJQBnIx5wVOuNe89X6v7NbNzrAZhvn","duration":180},"verificationTemplate":{"subject":"Verify your {APP_NAME} email","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eThank you for joining us at {APP_NAME}.\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to verify your email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eVerify\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"resetPasswordTemplate":{"subject":"Reset your {APP_NAME} password","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to reset your password.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eReset password\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to reset your password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"confirmEmailChangeTemplate":{"subject":"Confirm your {APP_NAME} new email address","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to confirm your new email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eConfirm new email\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to change your email address, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}}	2022-10-11 09:41:36.712Z	2026-05-14 18:14:18.566Z	["CREATE UNIQUE INDEX `_v851q4r790rhknl_username_idx` ON `clients` (username)","CREATE UNIQUE INDEX `_v851q4r790rhknl_email_idx` ON `clients` (email) WHERE email != ''","CREATE UNIQUE INDEX `_v851q4r790rhknl_tokenKey_idx` ON `clients` (tokenKey)","CREATE INDEX `_v851q4r790rhknl_created_idx` ON `clients` (`created`)"]
+kpv709sk2lqbqk8	t	auth	nologin	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"cost":10,"hidden":true,"id":"_pbf_auth_password_","max":0,"min":8,"name":"password","pattern":"","presentable":false,"required":true,"system":true,"type":"password"},{"autogeneratePattern":"[a-zA-Z0-9_]{50}","hidden":true,"id":"_pbf_auth_tokenKey_","max":60,"min":30,"name":"tokenKey","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"exceptDomains":null,"hidden":false,"id":"_pbf_auth_email_","name":"email","onlyDomains":null,"presentable":false,"required":true,"system":true,"type":"email"},{"hidden":false,"id":"_pbf_auth_emailVisibility_","name":"emailVisibility","presentable":false,"required":false,"system":true,"type":"bool"},{"hidden":false,"id":"_pbf_auth_verified_","name":"verified","presentable":false,"required":false,"system":true,"type":"bool"},{"autogeneratePattern":"users[0-9]{5}","hidden":false,"id":"_pbf_auth_username_","max":150,"min":3,"name":"username","pattern":"^[\\\\w][\\\\w\\\\.\\\\-]*$","presentable":false,"primaryKey":false,"required":true,"system":false,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"x8zzktwe","max":0,"min":0,"name":"name","pattern":"","presentable":false,"primaryKey":false,"required":false,"system":false,"type":"text"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]						{"authRule":"","manageRule":"@request.auth.collectionName = 'users'","authAlert":{"enabled":true,"emailTemplate":{"subject":"Login from a new location","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eWe noticed a login to your {APP_NAME} account from a new location:\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cem\\u003e{ALERT_INFO}\\u003c/em\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cstrong\\u003eIf this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003eIf this was you, you may disregard this email.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"oauth2":{"providers":[{"pkce":null,"name":"gitlab","clientId":"test","clientSecret":"test","authURL":"","tokenURL":"","userInfoURL":"","displayName":"","extra":null}],"mappedFields":{"id":"","name":"","username":"username","avatarURL":""},"enabled":false},"passwordAuth":{"enabled":false,"identityFields":["email"]},"mfa":{"enabled":false,"duration":1800,"rule":""},"otp":{"enabled":false,"duration":300,"length":8,"emailTemplate":{"subject":"OTP for {APP_NAME}","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eYour one-time password is: \\u003cstrong\\u003e{OTP}\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask for the one-time password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"authToken":{"secret":"PjVU4hAV7CZIWbCByJHkDcMUlSEWCLI6M5aWSZOpEq0a3rYxKT","duration":1209600},"passwordResetToken":{"secret":"BC6jYPe4JXpQGGNzu6VXtYw0yhKoH2mh2ezIJClOJQuZYrd4Ol","duration":1800},"emailChangeToken":{"secret":"eON2TTJZiGCEi7mvUvwMLADj8CMHQzwZN3gmyMjQb24EY08ATP","duration":1800},"verificationToken":{"secret":"dgGGHlzzdCJ2C5MjXGoondllwSXkJHyL50FuvLvXGHNmBhvGKO","duration":604800},"fileToken":{"secret":"4Ax9zDm2Rwtny81dGaGQrJQBnIx5wVOuNe89X6v7NbNzrAZhvn","duration":180},"verificationTemplate":{"subject":"Verify your {APP_NAME} email","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eThank you for joining us at {APP_NAME}.\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to verify your email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eVerify\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"resetPasswordTemplate":{"subject":"Reset your {APP_NAME} password","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to reset your password.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eReset password\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to reset your password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"confirmEmailChangeTemplate":{"subject":"Confirm your {APP_NAME} new email address","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to confirm your new email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eConfirm new email\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to change your email address, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}}	2022-10-12 10:39:21.294Z	2025-11-10 15:34:06.288Z	["CREATE UNIQUE INDEX `_kpv709sk2lqbqk8_username_idx` ON `nologin` (username)","CREATE UNIQUE INDEX `_kpv709sk2lqbqk8_email_idx` ON `nologin` (email) WHERE email != ''","CREATE UNIQUE INDEX `_kpv709sk2lqbqk8_tokenKey_idx` ON `nologin` (tokenKey)","CREATE INDEX `_kpv709sk2lqbqk8_created_idx` ON \\"nologin\\" (`created`)"]
+9n89pl5vkct6330	f	base	demo5	[{"autogeneratePattern":"[a-z0-9]{15}","help":"","hidden":false,"id":"_pbf_text_id_","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"help":"","hidden":false,"id":"sozvpexq","maxSelect":1,"name":"select_one","presentable":false,"required":false,"system":false,"type":"select","values":["a","b","c","d"]},{"help":"","hidden":false,"id":"qlq1nxlc","maxSelect":5,"name":"select_many","presentable":false,"required":false,"system":false,"type":"select","values":["a","b","c","d","e"]},{"cascadeDelete":false,"collectionId":"4d1blo5cuycfaca","help":"","hidden":false,"id":"ajrrsq1a","maxSelect":1,"minSelect":0,"name":"rel_one","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":false,"collectionId":"4d1blo5cuycfaca","help":"","hidden":false,"id":"soxhs0ou","maxSelect":5,"minSelect":0,"name":"rel_many","presentable":false,"required":false,"system":false,"type":"relation"},{"help":"","hidden":false,"id":"kvbyzuqj","max":null,"min":null,"name":"total","onlyInt":false,"presentable":false,"required":false,"system":false,"type":"number"},{"help":"","hidden":false,"id":"ob7dsrcl","maxSelect":1,"maxSize":5242880,"mimeTypes":null,"name":"file","presentable":false,"protected":false,"required":false,"system":false,"thumbs":null,"type":"file"},{"hidden":false,"id":"_pbf_autodate_created_","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"},{"hidden":false,"id":"_pbf_autodate_updated_","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":false,"type":"autodate"}]	select_many:length = 3	rel_many.self_rel_many.rel_many_cascade.files:length = 1	@request.body.total = 3	@request.body.total = 3	@request.query.test:isset = true	{}	2023-01-07 13:13:08.733Z	2026-05-14 18:14:18.602Z	["CREATE INDEX `_9n89pl5vkct6330_created_idx` ON `demo5` (`created`)"]
 v9gwnfh02gjq1q0	f	view	view1	[{"autogeneratePattern":"","hidden":false,"id":"text3208210256","max":0,"min":0,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"_clone_r09R","max":0,"min":0,"name":"text","pattern":"","presentable":false,"primaryKey":false,"required":false,"system":false,"type":"text"},{"hidden":false,"id":"_clone_8o57","name":"bool","presentable":false,"required":false,"system":false,"type":"bool"},{"exceptDomains":null,"hidden":false,"id":"_clone_y2Ow","name":"url","onlyDomains":null,"presentable":false,"required":false,"system":false,"type":"url"},{"hidden":false,"id":"_clone_jFNd","maxSelect":1,"name":"select_one","presentable":false,"required":false,"system":false,"type":"select","values":["optionA","optionB","optionC"]},{"hidden":false,"id":"_clone_mNKL","maxSelect":3,"name":"select_many","presentable":false,"required":false,"system":false,"type":"select","values":["optionA","optionB","optionC"]},{"hidden":false,"id":"_clone_diFB","maxSelect":1,"maxSize":5242880,"mimeTypes":null,"name":"file_one","presentable":false,"protected":true,"required":false,"system":false,"thumbs":null,"type":"file"},{"hidden":false,"id":"_clone_dViH","maxSelect":99,"maxSize":5242880,"mimeTypes":null,"name":"file_many","presentable":false,"protected":false,"required":false,"system":false,"thumbs":null,"type":"file"},{"hidden":false,"id":"_clone_dIjh","max":null,"min":null,"name":"number","onlyInt":false,"presentable":false,"required":false,"system":false,"type":"number"},{"exceptDomains":null,"hidden":false,"id":"_clone_5R4l","name":"email","onlyDomains":null,"presentable":false,"required":false,"system":false,"type":"email"},{"hidden":false,"id":"_clone_LZkS","max":"","min":"","name":"datetime","presentable":false,"required":false,"system":false,"type":"date"},{"hidden":false,"id":"_clone_yiCN","maxSize":5242880,"name":"json","presentable":false,"required":false,"system":false,"type":"json"},{"cascadeDelete":false,"collectionId":"wsmn24bux7wo113","hidden":false,"id":"_clone_UJXf","maxSelect":1,"minSelect":0,"name":"rel_one","presentable":false,"required":false,"system":false,"type":"relation"},{"cascadeDelete":true,"collectionId":"_pb_users_auth_","hidden":false,"id":"_clone_0li1","maxSelect":9999,"minSelect":0,"name":"rel_many","presentable":false,"required":false,"system":false,"type":"relation"},{"hidden":false,"id":"_clone_VWxh","name":"point","presentable":false,"required":false,"system":false,"type":"geoPoint"},{"hidden":false,"id":"_clone_b5hm","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":false,"type":"autodate"}]	@request.auth.id != "" && bool = true	@request.auth.id != "" && bool = true	\N	\N	\N	{"viewQuery":"select id, text, bool, url, select_one, select_many, file_one, file_many, number, email, datetime, json, rel_one, rel_many, point, created from demo1"}	2023-02-12 18:58:12.315Z	2025-10-23 11:42:16.302Z	[]
 ib3m2700k5hlsjz	f	view	view2	[{"autogeneratePattern":"","hidden":false,"id":"text3208210256","max":0,"min":0,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"hidden":false,"id":"_clone_77Ik","name":"state","presentable":false,"required":false,"system":false,"type":"bool"},{"hidden":false,"id":"_clone_IbSu","maxSelect":99,"maxSize":5242880,"mimeTypes":null,"name":"file_many","presentable":false,"protected":false,"required":false,"system":false,"thumbs":null,"type":"file"},{"cascadeDelete":true,"collectionId":"_pb_users_auth_","hidden":false,"id":"_clone_Asz0","maxSelect":9999,"minSelect":0,"name":"rel_many","presentable":false,"required":false,"system":false,"type":"relation"}]			\N	\N	\N	{"viewQuery":"SELECT view1.id, view1.bool as state, view1.file_many, view1.rel_many from view1\\n"}	2023-02-17 19:42:54.278Z	2024-11-19 15:29:43.857Z	[]
 zahsr9d2mix2fvk	f	view	numeric_id_view	[{"autogeneratePattern":"","hidden":false,"id":"text3208210256","max":0,"min":0,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"exceptDomains":null,"hidden":false,"id":"_clone_jO9O","name":"email","onlyDomains":null,"presentable":false,"required":true,"system":true,"type":"email"}]			\N	\N	\N	{"viewQuery":"select (ROW_NUMBER() OVER()) as id, email from clients"}	2023-08-11 09:41:00.997Z	2024-11-19 15:29:43.901Z	[]
-pbc_3142635823	t	auth	_superusers	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"text3208210256","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"cost":0,"hidden":true,"id":"password901924565","max":0,"min":8,"name":"password","pattern":"","presentable":false,"required":true,"system":true,"type":"password"},{"autogeneratePattern":"[a-zA-Z0-9_]{50}","hidden":true,"id":"text2504183744","max":60,"min":30,"name":"tokenKey","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"exceptDomains":null,"hidden":false,"id":"email3885137012","name":"email","onlyDomains":null,"presentable":false,"required":true,"system":true,"type":"email"},{"hidden":false,"id":"bool1547992806","name":"emailVisibility","presentable":false,"required":false,"system":true,"type":"bool"},{"hidden":false,"id":"bool256245529","name":"verified","presentable":false,"required":false,"system":true,"type":"bool"},{"hidden":false,"id":"autodate2990389176","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":true,"type":"autodate"},{"hidden":false,"id":"autodate3332085495","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":true,"type":"autodate"}]	\N	\N	\N	\N	\N	{"authRule":"","manageRule":null,"authAlert":{"enabled":true,"emailTemplate":{"subject":"Login from a new location","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eWe noticed a login to your {APP_NAME} account from a new location:\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cem\\u003e{ALERT_INFO}\\u003c/em\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cstrong\\u003eIf this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003eIf this was you, you may disregard this email.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"oauth2":{"providers":null,"mappedFields":{"id":"","name":"","username":"","avatarURL":""},"enabled":false},"passwordAuth":{"enabled":true,"identityFields":["email"]},"mfa":{"enabled":false,"duration":1800,"rule":""},"otp":{"enabled":false,"duration":300,"length":8,"emailTemplate":{"subject":"OTP for {APP_NAME}","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eYour one-time password is: \\u003cstrong\\u003e{OTP}\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask for the one-time password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"authToken":{"secret":"MyN3nDlzmHnuCjd35vb6cyIdqNr7Os0PmgiPVDMxmbFToSpBvS","duration":1209600},"passwordResetToken":{"secret":"fPSpFm9rxjj4mdeWYfyQ5OZQ4UWpyainTO0dqrJe3LHEYEDduq","duration":1800},"emailChangeToken":{"secret":"unYNiYeuIxH7BCV09NIb81abe2bkPgaexMYdDQ6uOOIFh74urD","duration":1800},"verificationToken":{"secret":"uhr68rXLVjPBWALFtw8uEHeQwDdN4t0MiTLr2pBWVkEQnNICe1","duration":259200},"fileToken":{"secret":"sjJAjTNPrOcRDmnIKwQm7qY9FyjuXTG5KNcaqw4U1TSDVfu4r9","duration":180},"verificationTemplate":{"subject":"Verify your {APP_NAME} email","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eThank you for joining us at {APP_NAME}.\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to verify your email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eVerify\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"resetPasswordTemplate":{"subject":"Reset your {APP_NAME} password","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to reset your password.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eReset password\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to reset your password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"confirmEmailChangeTemplate":{"subject":"Confirm your {APP_NAME} new email address","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to confirm your new email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eConfirm new email\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to change your email address, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}}	2024-06-20 09:29:22.826Z	2025-11-10 15:33:49.591Z	["CREATE UNIQUE INDEX \\"idx_tokenKey__pbc_3323866339\\" ON \\"_superusers\\" (\\"tokenKey\\")","CREATE UNIQUE INDEX \\"idx_email__pbc_3323866339\\" ON \\"_superusers\\" (\\"email\\") WHERE \\"email\\" != ''"]
-pbc_2281828961	t	base	_externalAuths	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"text3208210256","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text455797646","max":0,"min":0,"name":"collectionRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text127846527","max":0,"min":0,"name":"recordRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text2462348188","max":0,"min":0,"name":"provider","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text1044722854","max":0,"min":0,"name":"providerId","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"hidden":false,"id":"autodate2990389176","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":true,"type":"autodate"},{"hidden":false,"id":"autodate3332085495","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":true,"type":"autodate"}]	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	\N	\N	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	{}	2024-06-20 09:29:22.862Z	2024-07-31 16:33:51.596Z	["CREATE UNIQUE INDEX \\"idx_externalAuths_record_provider\\" ON \\"externalAuths\\" (\\"collectionRef\\", \\"recordRef\\", provider)","CREATE UNIQUE INDEX \\"idx_externalAuths_collection_provider\\" ON \\"externalAuths\\" (\\"collectionRef\\", provider, \\"providerId\\")"]
-pbc_2279338944	t	base	_mfas	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"text3208210256","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text455797646","max":0,"min":0,"name":"collectionRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text127846527","max":0,"min":0,"name":"recordRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text1582905952","max":0,"min":0,"name":"method","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"hidden":false,"id":"autodate2990389176","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":true,"type":"autodate"},{"hidden":false,"id":"autodate3332085495","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":true,"type":"autodate"}]	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	\N	\N	\N	{}	2024-06-20 09:29:22.894Z	2024-10-24 18:34:35.352Z	["CREATE INDEX \\"idx_mfas_collectionRef_recordRef\\" ON \\"mfas\\" (\\n  \\"collectionRef\\",\\n  \\"recordRef\\"\\n)"]
-pbc_1638494021	t	base	_otps	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"text3208210256","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text455797646","max":0,"min":0,"name":"collectionRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text127846527","max":0,"min":0,"name":"recordRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"cost":8,"hidden":true,"id":"password901924565","max":0,"min":0,"name":"password","pattern":"","presentable":false,"required":true,"system":true,"type":"password"},{"hidden":false,"id":"autodate2990389176","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":true,"type":"autodate"},{"hidden":false,"id":"autodate3332085495","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":true,"type":"autodate"},{"autogeneratePattern":"","hidden":true,"id":"text3866985172","max":0,"min":0,"name":"sentTo","pattern":"","presentable":false,"primaryKey":false,"required":false,"system":true,"type":"text"}]	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	\N	\N	\N	{}	2024-06-20 09:29:22.901Z	2024-11-19 15:29:43.633Z	["CREATE INDEX \\"idx_otps_collectionRef_recordRef\\" ON \\"otps\\" (\\n  \\"collectionRef\\",\\n  \\"recordRef\\"\\n)"]
-pbc_4275539003	t	base	_authOrigins	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"text3208210256","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text455797646","max":0,"min":0,"name":"collectionRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text127846527","max":0,"min":0,"name":"recordRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text4228609354","max":0,"min":0,"name":"fingerprint","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"hidden":false,"id":"autodate2990389176","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":true,"type":"autodate"},{"hidden":false,"id":"autodate3332085495","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":true,"type":"autodate"}]	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	\N	\N	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	{}	2024-06-20 12:10:52.542Z	2024-07-31 16:32:24.722Z	["CREATE UNIQUE INDEX \\"idx_authOrigins_unique_pairs\\" ON \\"authDevices\\" (\\"collectionRef\\", \\"recordRef\\", fingerprint)"]
+pbc_3142635823	t	auth	_superusers	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"text3208210256","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"cost":0,"hidden":true,"id":"password901924565","max":0,"min":8,"name":"password","pattern":"","presentable":false,"required":true,"system":true,"type":"password"},{"autogeneratePattern":"[a-zA-Z0-9_]{50}","hidden":true,"id":"text2504183744","max":60,"min":30,"name":"tokenKey","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"exceptDomains":null,"hidden":false,"id":"email3885137012","name":"email","onlyDomains":null,"presentable":false,"required":true,"system":true,"type":"email"},{"hidden":false,"id":"bool1547992806","name":"emailVisibility","presentable":false,"required":false,"system":true,"type":"bool"},{"hidden":false,"id":"bool256245529","name":"verified","presentable":false,"required":false,"system":true,"type":"bool"},{"hidden":false,"id":"autodate2990389176","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":true,"type":"autodate"},{"hidden":false,"id":"autodate3332085495","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":true,"type":"autodate"}]	\N	\N	\N	\N	\N	{"authRule":"","manageRule":null,"authAlert":{"enabled":true,"emailTemplate":{"subject":"Login from a new location","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eWe noticed a login to your {APP_NAME} account from a new location:\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cem\\u003e{ALERT_INFO}\\u003c/em\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003cstrong\\u003eIf this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003eIf this was you, you may disregard this email.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"oauth2":{"providers":null,"mappedFields":{"id":"","name":"","username":"","avatarURL":""},"enabled":false},"passwordAuth":{"enabled":true,"identityFields":["email"]},"mfa":{"enabled":false,"duration":1800,"rule":""},"otp":{"enabled":false,"duration":300,"length":8,"emailTemplate":{"subject":"OTP for {APP_NAME}","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eYour one-time password is: \\u003cstrong\\u003e{OTP}\\u003c/strong\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask for the one-time password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}},"authToken":{"secret":"MyN3nDlzmHnuCjd35vb6cyIdqNr7Os0PmgiPVDMxmbFToSpBvS","duration":1209600},"passwordResetToken":{"secret":"fPSpFm9rxjj4mdeWYfyQ5OZQ4UWpyainTO0dqrJe3LHEYEDduq","duration":1800},"emailChangeToken":{"secret":"unYNiYeuIxH7BCV09NIb81abe2bkPgaexMYdDQ6uOOIFh74urD","duration":1800},"verificationToken":{"secret":"uhr68rXLVjPBWALFtw8uEHeQwDdN4t0MiTLr2pBWVkEQnNICe1","duration":259200},"fileToken":{"secret":"sjJAjTNPrOcRDmnIKwQm7qY9FyjuXTG5KNcaqw4U1TSDVfu4r9","duration":180},"verificationTemplate":{"subject":"Verify your {APP_NAME} email","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eThank you for joining us at {APP_NAME}.\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to verify your email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eVerify\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"resetPasswordTemplate":{"subject":"Reset your {APP_NAME} password","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to reset your password.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eReset password\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to reset your password, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"},"confirmEmailChangeTemplate":{"subject":"Confirm your {APP_NAME} new email address","body":"\\u003cp\\u003eHello,\\u003c/p\\u003e\\n\\u003cp\\u003eClick on the button below to confirm your new email address.\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  \\u003ca class=\\"btn\\" href=\\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\\" target=\\"_blank\\" rel=\\"noopener\\"\\u003eConfirm new email\\u003c/a\\u003e\\n\\u003c/p\\u003e\\n\\u003cp\\u003e\\u003ci\\u003eIf you didn't ask to change your email address, you can ignore this email.\\u003c/i\\u003e\\u003c/p\\u003e\\n\\u003cp\\u003e\\n  Thanks,\\u003cbr/\\u003e\\n  {APP_NAME} team\\n\\u003c/p\\u003e"}}	2024-06-20 09:29:22.826Z	2025-11-10 15:33:49.591Z	["CREATE UNIQUE INDEX `idx_tokenKey__pbc_3323866339` ON `_superusers` (`tokenKey`)","CREATE UNIQUE INDEX `idx_email__pbc_3323866339` ON `_superusers` (`email`) WHERE `email` != ''"]
+pbc_2281828961	t	base	_externalAuths	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"text3208210256","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text455797646","max":0,"min":0,"name":"collectionRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text127846527","max":0,"min":0,"name":"recordRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text2462348188","max":0,"min":0,"name":"provider","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text1044722854","max":0,"min":0,"name":"providerId","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"hidden":false,"id":"autodate2990389176","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":true,"type":"autodate"},{"hidden":false,"id":"autodate3332085495","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":true,"type":"autodate"}]	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	\N	\N	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	{}	2024-06-20 09:29:22.862Z	2024-07-31 16:33:51.596Z	["CREATE UNIQUE INDEX `idx_externalAuths_record_provider` ON `externalAuths` (collectionRef, recordRef, provider)","CREATE UNIQUE INDEX `idx_externalAuths_collection_provider` ON `externalAuths` (collectionRef, provider, providerId)"]
+pbc_2279338944	t	base	_mfas	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"text3208210256","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text455797646","max":0,"min":0,"name":"collectionRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text127846527","max":0,"min":0,"name":"recordRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text1582905952","max":0,"min":0,"name":"method","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"hidden":false,"id":"autodate2990389176","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":true,"type":"autodate"},{"hidden":false,"id":"autodate3332085495","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":true,"type":"autodate"}]	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	\N	\N	\N	{}	2024-06-20 09:29:22.894Z	2024-10-24 18:34:35.352Z	["CREATE INDEX `idx_mfas_collectionRef_recordRef` ON `mfas` (\\n  `collectionRef`,\\n  `recordRef`\\n)"]
+pbc_1638494021	t	base	_otps	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"text3208210256","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text455797646","max":0,"min":0,"name":"collectionRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text127846527","max":0,"min":0,"name":"recordRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"cost":8,"hidden":true,"id":"password901924565","max":0,"min":0,"name":"password","pattern":"","presentable":false,"required":true,"system":true,"type":"password"},{"hidden":false,"id":"autodate2990389176","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":true,"type":"autodate"},{"hidden":false,"id":"autodate3332085495","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":true,"type":"autodate"},{"autogeneratePattern":"","hidden":true,"id":"text3866985172","max":0,"min":0,"name":"sentTo","pattern":"","presentable":false,"primaryKey":false,"required":false,"system":true,"type":"text"}]	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	\N	\N	\N	{}	2024-06-20 09:29:22.901Z	2024-11-19 15:29:43.633Z	["CREATE INDEX `idx_otps_collectionRef_recordRef` ON `otps` (\\n  `collectionRef`,\\n  `recordRef`\\n)"]
+pbc_4275539003	t	base	_authOrigins	[{"autogeneratePattern":"[a-z0-9]{15}","hidden":false,"id":"text3208210256","max":15,"min":15,"name":"id","pattern":"^[a-z0-9]+$","presentable":false,"primaryKey":true,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text455797646","max":0,"min":0,"name":"collectionRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text127846527","max":0,"min":0,"name":"recordRef","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"autogeneratePattern":"","hidden":false,"id":"text4228609354","max":0,"min":0,"name":"fingerprint","pattern":"","presentable":false,"primaryKey":false,"required":true,"system":true,"type":"text"},{"hidden":false,"id":"autodate2990389176","name":"created","onCreate":true,"onUpdate":false,"presentable":false,"system":true,"type":"autodate"},{"hidden":false,"id":"autodate3332085495","name":"updated","onCreate":true,"onUpdate":true,"presentable":false,"system":true,"type":"autodate"}]	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	\N	\N	@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId	{}	2024-06-20 12:10:52.542Z	2024-07-31 16:32:24.722Z	["CREATE UNIQUE INDEX `idx_authOrigins_unique_pairs` ON `authDevices` (collectionRef, recordRef, fingerprint)"]
 \.
 
 
 --
--- Data for Name: "_externalAuths"; Type: TABLE DATA; Schema: public; Owner: user
+-- Data for Name: _externalauths; Type: TABLE DATA; Schema: public; Owner: user
 --
 
 COPY public."_externalAuths" ("collectionRef", created, id, provider, "providerId", "recordRef", updated) FROM stdin;
@@ -545,6 +765,9 @@ COPY public._migrations (file, applied) FROM stdin;
 1762788817_updated_users.js	1762788817890021
 1762788829_updated__superusers.js	1762788829638737
 1762788846_updated_nologin.js	1762788846329028
+1763020353_update_default_auth_alert_templates.go	1772312722007550
+1772312824_updated_demo3.js	1772312824282375
+1778828400_normalize_indexes.go	1778782458633054
 \.
 
 
@@ -590,7 +813,7 @@ COPY public.clients (created, email, "emailVisibility", id, name, password, "tok
 -- Data for Name: demo1; Type: TABLE DATA; Schema: public; Owner: user
 --
 
-COPY public.demo1 (created, id, updated, text, bool, url, select_one, file_one, file_many, number, email, datetime, "json", rel_one, select_many, rel_many, point) FROM stdin;
+COPY public.demo1 (created, id, updated, text, bool, url, select_one, file_one, file_many, number, email, datetime, json, rel_one, select_many, rel_many, point) FROM stdin;
 2022-10-14 10:13:12.397Z	84nmscqy84lsi1t	2023-01-04 20:11:20.732Z	test	t	https://example.copm	optionB	test_d61b33QdDU.txt	["test_QZFjKjXchk.txt","300_WlbFWSGmW9.png","logo_vcfJJG5TAh.svg","test_MaWC6mWyrP.txt","test_tC1Yc87DfC.txt"]	123456	test@example.com	2022-10-01 12:00:00.000Z	[\r\n  1,\r\n  2,\r\n  3\r\n]		["optionB","optionC"]	["oap640cot4yru2s"]	{"lat":0,"lon":0}
 2022-10-14 10:14:04.685Z	al1h9ijdeojtsjy	2025-04-02 11:05:26.292Z	test2	f		optionB	300_Jsjq7RdBgA.png	[]	456	test2@example.com		null	84nmscqy84lsi1t	["optionB"]	["bgs820n361vj1qd","4q1xlclmfloku33","oap640cot4yru2s"]	{"lon":23.333157,"lat":42.654318}
 2022-10-14 10:36:21.012Z	imy661ixudk5izi	2025-04-02 11:05:03.433Z	lorem ipsum	f				[]	0			null		[]	[]	{"lon":-74.006015,"lat":40.712728}
@@ -624,7 +847,7 @@ COPY public.demo3 (created, id, title, updated, files) FROM stdin;
 -- Data for Name: demo4; Type: TABLE DATA; Schema: public; Owner: user
 --
 
-COPY public.demo4 (created, id, title, updated, rel_one_no_cascade, rel_one_no_cascade_required, rel_one_cascade, self_rel_one, "json_array", "json_object", rel_one_unique, rel_many_no_cascade, rel_many_no_cascade_required, rel_many_cascade, rel_many_unique, self_rel_many) FROM stdin;
+COPY public.demo4 (created, id, title, updated, rel_one_no_cascade, rel_one_no_cascade_required, rel_one_cascade, self_rel_one, json_array, json_object, rel_one_unique, rel_many_no_cascade, rel_many_no_cascade_required, rel_many_cascade, rel_many_unique, self_rel_many) FROM stdin;
 2022-10-14 14:15:43.771Z	qzaqccwrmva4o1n	test1	2022-10-20 19:23:59.427Z	mk5fmymtx4wsprk	lcl9d87w22ml6jy	7nwo8tuiatetxdm	i9naidtvr6qsgb4	[\r\n  1\r\n]	{"a": 123}		["1tmknxy2868d869"]	["lcl9d87w22ml6jy","1tmknxy2868d869"]	["mk5fmymtx4wsprk"]	[]	["i9naidtvr6qsgb4","qzaqccwrmva4o1n"]
 2022-10-14 17:35:18.647Z	i9naidtvr6qsgb4	test2	2022-10-20 19:23:39.645Z		lcl9d87w22ml6jy		qzaqccwrmva4o1n	[1, 2, 3]	{"a": {"b": "test"}}		[]	["7nwo8tuiatetxdm"]	[]	[]	[]
 \.
@@ -727,11 +950,11 @@ COPY public.users (avatar, created, email, "emailVisibility", id, name, password
 
 
 --
--- Name: "_authOrigins" sqlite_autoindex__authOrigins_1; Type: CONSTRAINT; Schema: public; Owner: user
+-- Name: _authorigins sqlite_autoindex__authorigins_1; Type: CONSTRAINT; Schema: public; Owner: user
 --
 
 ALTER TABLE ONLY public."_authOrigins"
-    ADD CONSTRAINT "sqlite_autoindex__authOrigins_1" PRIMARY KEY (id);
+    ADD CONSTRAINT sqlite_autoindex__authorigins_1 PRIMARY KEY (id);
 
 
 --
@@ -743,11 +966,11 @@ ALTER TABLE ONLY public._collections
 
 
 --
--- Name: "_externalAuths" sqlite_autoindex__externalAuths_1; Type: CONSTRAINT; Schema: public; Owner: user
+-- Name: _externalauths sqlite_autoindex__externalauths_1; Type: CONSTRAINT; Schema: public; Owner: user
 --
 
 ALTER TABLE ONLY public."_externalAuths"
-    ADD CONSTRAINT "sqlite_autoindex__externalAuths_1" PRIMARY KEY (id);
+    ADD CONSTRAINT sqlite_autoindex__externalauths_1 PRIMARY KEY (id);
 
 
 --
@@ -879,11 +1102,11 @@ CREATE INDEX "__pb_users_auth__created_idx" ON public.users USING btree (created
 -- Name: __pb_users_auth__email_idx; Type: INDEX; Schema: public; Owner: user
 --
 
-CREATE UNIQUE INDEX "__pb_users_auth__email_idx" ON public.users USING btree (email) WHERE "email" != '';
+CREATE UNIQUE INDEX "__pb_users_auth__email_idx" ON public.users USING btree (email) WHERE (email != '');
 
 
 --
--- Name: __pb_users_auth__tokenKey_idx; Type: INDEX; Schema: public; Owner: user
+-- Name: __pb_users_auth__tokenkey_idx; Type: INDEX; Schema: public; Owner: user
 --
 
 CREATE UNIQUE INDEX "__pb_users_auth__tokenKey_idx" ON public.users USING btree ("tokenKey");
@@ -907,7 +1130,7 @@ CREATE INDEX "_kpv709sk2lqbqk8_created_idx" ON public.nologin USING btree (creat
 -- Name: _kpv709sk2lqbqk8_email_idx; Type: INDEX; Schema: public; Owner: user
 --
 
-CREATE UNIQUE INDEX "_kpv709sk2lqbqk8_email_idx" ON public.nologin USING btree (email);
+CREATE UNIQUE INDEX "_kpv709sk2lqbqk8_email_idx" ON public.nologin USING btree (email) WHERE (email != '');
 
 
 --
@@ -935,11 +1158,11 @@ CREATE INDEX "_v851q4r790rhknl_created_idx" ON public.clients USING btree (creat
 -- Name: _v851q4r790rhknl_email_idx; Type: INDEX; Schema: public; Owner: user
 --
 
-CREATE UNIQUE INDEX "_v851q4r790rhknl_email_idx" ON public.clients USING btree (email);
+CREATE UNIQUE INDEX "_v851q4r790rhknl_email_idx" ON public.clients USING btree (email) WHERE (email != '');
 
 
 --
--- Name: _v851q4r790rhknl_tokenKey_idx; Type: INDEX; Schema: public; Owner: user
+-- Name: _v851q4r790rhknl_tokenkey_idx; Type: INDEX; Schema: public; Owner: user
 --
 
 CREATE UNIQUE INDEX "_v851q4r790rhknl_tokenKey_idx" ON public.clients USING btree ("tokenKey");
@@ -974,7 +1197,7 @@ CREATE INDEX "idx__collections_type" ON public._collections USING btree (type);
 
 
 --
--- Name: idx_authOrigins_unique_pairs; Type: INDEX; Schema: public; Owner: user
+-- Name: idx_authorigins_unique_pairs; Type: INDEX; Schema: public; Owner: user
 --
 
 CREATE UNIQUE INDEX "idx_authOrigins_unique_pairs" ON public."_authOrigins" USING btree ("collectionRef", "recordRef", fingerprint);
@@ -998,32 +1221,32 @@ CREATE INDEX "idx_demo2_created" ON public.demo2 USING btree (created);
 -- Name: idx_email__pbc_3323866339; Type: INDEX; Schema: public; Owner: user
 --
 
-CREATE UNIQUE INDEX "idx_email__pbc_3323866339" ON public._superusers USING btree (email);
+CREATE UNIQUE INDEX "idx_email__pbc_3323866339" ON public._superusers USING btree (email) WHERE ("email" != '');
 
 
 --
--- Name: idx_externalAuths_collection_provider; Type: INDEX; Schema: public; Owner: user
+-- Name: idx_externalauths_collection_provider; Type: INDEX; Schema: public; Owner: user
 --
 
 CREATE UNIQUE INDEX "idx_externalAuths_collection_provider" ON public."_externalAuths" USING btree ("collectionRef", provider, "providerId");
 
 
 --
--- Name: idx_externalAuths_record_provider; Type: INDEX; Schema: public; Owner: user
+-- Name: idx_externalauths_record_provider; Type: INDEX; Schema: public; Owner: user
 --
 
 CREATE UNIQUE INDEX "idx_externalAuths_record_provider" ON public."_externalAuths" USING btree ("collectionRef", "recordRef", provider);
 
 
 --
--- Name: idx_mfas_collectionRef_recordRef; Type: INDEX; Schema: public; Owner: user
+-- Name: idx_mfas_collectionref_recordref; Type: INDEX; Schema: public; Owner: user
 --
 
 CREATE INDEX "idx_mfas_collectionRef_recordRef" ON public._mfas USING btree ("collectionRef", "recordRef");
 
 
 --
--- Name: idx_otps_collectionRef_recordRef; Type: INDEX; Schema: public; Owner: user
+-- Name: idx_otps_collectionref_recordref; Type: INDEX; Schema: public; Owner: user
 --
 
 CREATE INDEX "idx_otps_collectionRef_recordRef" ON public._otps USING btree ("collectionRef", "recordRef");
@@ -1054,6 +1277,7 @@ CREATE UNIQUE INDEX "sqlite_autoindex__collections_2" ON public._collections USI
 -- PostgreSQL database dump complete
 --
 
+SET search_path TO public;
 
 CREATE VIEW "view1" AS SELECT * FROM (select id, text, bool, url, select_one, select_many, file_one, file_many, number, email, datetime, json, rel_one, rel_many, point, created from demo1);
 CREATE VIEW "view2" AS SELECT * FROM (SELECT view1.id, view1.bool as state, view1.file_many, view1.rel_many from view1);

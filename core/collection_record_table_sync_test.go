@@ -319,8 +319,13 @@ func TestDropIndexWithoutTableName(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
+	/* SQLite:
 	properIndex := "CREATE INDEX `new_test_idx2` ON `new_test` (`test`)"
 	indexWithoutTableName := "CREATE INDEX `new_test_idx2` ON `` (`test`)"
+	*/
+	// PostgreSQL:
+	properIndex := `CREATE INDEX "new_test_idx2" ON "new_test" ("test")`
+	indexWithoutTableName := `CREATE INDEX "new_test_idx2" ON "" ("test")`
 
 	dummyCollection := core.NewBaseCollection("new_test")
 	dummyCollection.Fields.Add(&core.TextField{Name: "test"})

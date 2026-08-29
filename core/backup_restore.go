@@ -48,6 +48,13 @@ import (
 // it is possible the restore to fail during the `os.Rename` operations
 // (see https://github.com/pocketbase/pocketbase/issues/4647).
 func (app *BaseApp) RestoreBackup(ctx context.Context, name string) error {
+	// PostgreSQL:
+	// The built-in restore is not supported when running on PostgreSQL because
+	// the backup zip format is SQLite specific (see CreateBackup).
+	if app.config.PostgresURL != "" {
+		return errors.New("the built-in backups are not supported with PostgreSQL - use pg_restore or another PostgreSQL restore solution instead")
+	}
+
 	if app.Store().Has(StoreKeyActiveBackup) {
 		return errors.New("try again later - another backup/restore operation has already been started")
 	}

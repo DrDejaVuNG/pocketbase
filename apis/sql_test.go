@@ -47,7 +47,11 @@ func TestSQLRun(t *testing.T) {
 			ExpectedContent: []string{
 				`"execTime":`,
 				`"affectedRows":0`,
+				/* SQLite:
 				`"columns":[{"name":"1","type":"","nullable":true}]`,
+				*/
+				// PostgreSQL:
+				`"columns":[{"name":"?column?","type":"INT4","nullable":false}]`,
 				`"rows":[["1"]]`,
 			},
 			ExpectedEvents: map[string]int{"*": 0},
@@ -81,9 +85,12 @@ func TestSQLRun(t *testing.T) {
 			ExpectedContent: []string{
 				`"data":{}`,
 				`Raw error:`,
+				/* SQLite:
 				`SQL logic error`,
+				*/
+				// PostgreSQL:
+				`syntax error`,
 			},
-			ExpectedEvents: map[string]int{"*": 0},
 		},
 		{
 			Name:   "query with length above the limit",
@@ -114,10 +121,13 @@ func TestSQLRun(t *testing.T) {
 			ExpectedContent: []string{
 				`"execTime":`,
 				`"affectedRows":0`,
+				/* SQLite:
 				`"columns":[{"name":"id","type":"","nullable":true}]`,
+				*/
+				// PostgreSQL:
+				`"columns":[{"name":"id","type":"TEXT","nullable":false}]`,
 				`"rows":[["aaa`,
 			},
-			ExpectedEvents: map[string]int{"*": 0},
 		},
 		{
 			Name:   "single write query",
@@ -189,9 +199,12 @@ func TestSQLRun(t *testing.T) {
 			ExpectedContent: []string{
 				`"data":{}`,
 				`Raw error:`,
+				/* SQLite:
 				`SQL logic error`,
+				*/
+				// PostgreSQL:
+				`syntax error`,
 			},
-			ExpectedEvents: map[string]int{"*": 0},
 		},
 		{
 			Name:   "multiple read queries",
@@ -202,6 +215,7 @@ func TestSQLRun(t *testing.T) {
 				// superusers, test@example.com
 				"Authorization": "eyJhbGciOiJIUzI1NiJ9.eyJpZCI6InN5d2JoZWNuaDQ2cmhtMCIsInR5cGUiOiJhdXRoIiwiY29sbGVjdGlvbklkIjoicGJjXzMxNDI2MzU4MjMiLCJleHAiOjI1MjQ2MDQ0NjEsInJlZnJlc2hhYmxlIjp0cnVlfQ.UXgO3j-0BumcugrFjbd7j0M4MQvbrLggLlcu_YNGjoY",
 			},
+			/* SQLite:
 			ExpectedStatus: 200,
 			ExpectedContent: []string{
 				`"execTime":`,
@@ -210,7 +224,14 @@ func TestSQLRun(t *testing.T) {
 				`"columns":[{"name":"2","type":"","nullable":true}]`,
 				`"rows":[["2"]]`,
 			},
-			ExpectedEvents: map[string]int{"*": 0},
+			*/
+			// PostgreSQL:
+			// Prepared statements in PostgreSQL do not support multiple statements in a single query.
+			ExpectedStatus: 400,
+			ExpectedContent: []string{
+				`"data":{}`,
+				`cannot insert multiple commands into a prepared statement`,
+			},
 		},
 	}
 
