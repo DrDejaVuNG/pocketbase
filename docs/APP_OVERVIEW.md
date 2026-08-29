@@ -4,6 +4,10 @@ PocketBase with PostgreSQL is a production-grade fork of [PocketBase](https://po
 
 The codebase is kept synchronized with upstream `pocketbase/pocketbase` releases (currently tracking **v0.40.1**).
 
+### Versioning Strategy
+- Releases tracking upstream releases directly: `v<upstream_version>` (e.g. `v0.40.1`).
+- Fork-specific PostgreSQL bug fixes and patches: `v<upstream_version>-hotfix<N>` (e.g. `v0.40.1-hotfix1`).
+  This avoids colliding with future official PocketBase releases while keeping upstream lineage explicit.
 ---
 
 ## Tech Stack
