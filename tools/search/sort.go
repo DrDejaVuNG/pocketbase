@@ -35,6 +35,18 @@ func (s *SortField) BuildExpr(fieldResolver FieldResolver) (string, error) {
 		return fmt.Sprintf("[[_rowid_]] %s", s.Direction), nil
 		*/
 		// PostgreSQL:
+		// PostgreSQL tables don't have a SQLite _rowid_ column and ctid is physical page ordering.
+		// Fallback to sorting by "created" (and "id") when available to preserve
+		// chronological insertion order as expected by the Admin UI default (?sort=-@rowid).
+		if result, err := fieldResolver.Resolve("created"); err == nil && result.Identifier != "" {
+			if idResult, err := fieldResolver.Resolve("id"); err == nil && idResult.Identifier != "" {
+				return fmt.Sprintf("%s %s, %s %s", result.Identifier, s.Direction, idResult.Identifier, s.Direction), nil
+			}
+			return fmt.Sprintf("%s %s", result.Identifier, s.Direction), nil
+		}
+		if result, err := fieldResolver.Resolve("id"); err == nil && result.Identifier != "" {
+			return fmt.Sprintf("%s %s", result.Identifier, s.Direction), nil
+		}
 		return fmt.Sprintf("[[ctid]] %s", s.Direction), nil
 	}
 

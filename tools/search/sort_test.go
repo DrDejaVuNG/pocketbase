@@ -54,6 +54,42 @@ func TestSortFieldBuildExpr(t *testing.T) {
 	}
 }
 
+func TestSortFieldBuildExprPostgresRowidFallback(t *testing.T) {
+	// resolver with created and id
+	resolverWithCreatedAndId := search.NewSimpleFieldResolver("created", "id", "name")
+	sf := search.SortField{Name: "@rowid", Direction: search.SortDesc}
+	expr, err := sf.BuildExpr(resolverWithCreatedAndId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := "[[created]] DESC, [[id]] DESC"
+	if expr != expected {
+		t.Fatalf("Expected %q, got %q", expected, expr)
+	}
+
+	// resolver with only id
+	resolverWithId := search.NewSimpleFieldResolver("id", "name")
+	expr, err = sf.BuildExpr(resolverWithId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected = "[[id]] DESC"
+	if expr != expected {
+		t.Fatalf("Expected %q, got %q", expected, expr)
+	}
+
+	// resolver with only created
+	resolverWithCreated := search.NewSimpleFieldResolver("created", "name")
+	expr, err = sf.BuildExpr(resolverWithCreated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected = "[[created]] DESC"
+	if expr != expected {
+		t.Fatalf("Expected %q, got %q", expected, expr)
+	}
+}
+
 func TestParseSortFromString(t *testing.T) {
 	scenarios := []struct {
 		value    string
