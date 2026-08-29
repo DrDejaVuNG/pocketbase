@@ -72,7 +72,7 @@ func (app *BaseApp) TableInfo(tableName string) ([]*TableInfoRow, error) {
 			WHERE 
 				tc.constraint_type = 'PRIMARY KEY' AND 
 				tc.table_name = {:table_name} AND 
-				tc.table_schema = 'public'
+				tc.table_schema = current_schema()
 		) pk ON c.column_name = pk.column_name
 		WHERE 
 			c.table_name = {:table_name} AND 
@@ -120,11 +120,16 @@ func (app *BaseApp) TableIndexes(tableName string) (map[string]string, error) {
 			SELECT indexname, indexdef
 			FROM pg_indexes
 			WHERE tablename = {:tableName}
-			AND indexname NOT IN (
-				SELECT conname
-				FROM pg_constraint
-				WHERE contype = 'p' AND conrelid = {:tableName}::regclass
-			);
+			  AND schemaname = current_schema()
+			  AND indexname NOT IN (
+				SELECT con.conname
+				FROM pg_constraint con
+				JOIN pg_class c ON c.oid = con.conrelid
+				JOIN pg_namespace n ON n.oid = c.relnamespace
+				WHERE con.contype = 'p'
+				  AND c.relname = {:tableName}
+				  AND n.nspname = current_schema()
+			  );
 		`).Bind(dbx.Params{"tableName": tableName}).All(&indexes)
 	if err != nil {
 		return nil, err

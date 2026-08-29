@@ -175,6 +175,43 @@ func TestTableIndexes(t *testing.T) {
 	}
 }
 
+func TestCamelCaseTableIndexesAndInfo(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	// Create camelCase table and index directly
+	_, err := app.DB().NewQuery(`
+		CREATE TABLE IF NOT EXISTS "wardrobeItems" (
+			"id" text PRIMARY KEY,
+			"userId" text DEFAULT '',
+			"name" text DEFAULT ''
+		);
+		CREATE INDEX IF NOT EXISTS "idx_wardrobeItems_userId" ON "wardrobeItems" ("userId");
+	`).Execute()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// TableIndexes must succeed on camelCase table name without ::regclass error
+	indexes, err := app.TableIndexes("wardrobeItems")
+	if err != nil {
+		t.Fatalf("TableIndexes failed on camelCase table: %v", err)
+	}
+	if _, ok := indexes["idx_wardrobeItems_userId"]; !ok {
+		t.Fatalf("Expected index idx_wardrobeItems_userId in %v", indexes)
+	}
+
+	// TableInfo must succeed on camelCase table name
+	info, err := app.TableInfo("wardrobeItems")
+	if err != nil {
+		t.Fatalf("TableInfo failed on camelCase table: %v", err)
+	}
+	if len(info) != 3 {
+		t.Fatalf("Expected 3 columns in wardrobeItems table_info, got %d", len(info))
+	}
+}
 func TestDeleteTable(t *testing.T) {
 	t.Parallel()
 
