@@ -61,8 +61,4 @@ snapshot:
   version_template: '{{ incpatch .Version }}-next'
 
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - '^examples:'
-      - '^ui:'
+  disable: true
