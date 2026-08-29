@@ -1,5 +1,5 @@
-github.com/DrDejaVuNG/dbx v0.0.0-20260824235413-443867223202 h1:bK9j2E50vCVr/+pX+6EizNB0SHypQHHlO2QNWLok420=
-github.com/DrDejaVuNG/dbx v0.0.0-20260824235413-443867223202/go.mod h1:GFL5jhGSSiAHTTsN1crO3JH09E5WdxMQvTnUe0waKZE=
+github.com/DrDejaVuNG/dbx v0.0.0-20260829122402-e9263a75dbed h1:pJjFIpLYPL5ZFGBmCX09+Uj3BqIMH/QHs0Yi1L2EsaU=
+github.com/DrDejaVuNG/dbx v0.0.0-20260829122402-e9263a75dbed/go.mod h1:GFL5jhGSSiAHTTsN1crO3JH09E5WdxMQvTnUe0waKZE=
 github.com/Masterminds/semver/v3 v3.5.0 h1:kQceYJfbupGfZOKZQg0kou0DgAKhzDg2NZPAwZ/2OOE=
 github.com/Masterminds/semver/v3 v3.5.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
 github.com/asaskevich/govalidator v0.0.0-20200108200545-475eaeb16496/go.mod h1:oGkLhpf+kjZl6xBf758TQhh5XrAeiJv/7FRz/2spLIg=
