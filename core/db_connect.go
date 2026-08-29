@@ -35,6 +35,21 @@ func PostgresDBConnectFunc(connectionString string) DBConnectFunc {
 	if url.Scheme != "postgres" && url.Scheme != "postgresql" {
 		panic(fmt.Errorf("invalid connection string scheme: [%s], must be [postgres] or [postgresql]", url.Scheme))
 	}
+	// Prefer no client-side statement cache. pgx's default
+	// QueryExecModeCacheStatement caches a prepared statement's result
+	// description per connection; when a schema change (e.g. a migration that
+	// adds a column to an existing collection) alters a table the cache still
+	// describes, the next execution of that statement fails with "cached plan
+	// must not change result type" (SQLSTATE 0A000). QueryExecModeDescribeExec
+	// re-prepares and re-describes on every execution, so DDL can never leave a
+	// stale result description behind, while still sending typed parameters
+	// over the extended protocol. Callers can override via
+	// default_query_exec_mode on the connection string.
+	if !url.Query().Has("default_query_exec_mode") {
+		q := url.Query()
+		q.Set("default_query_exec_mode", "describe_exec")
+		url.RawQuery = q.Encode()
+	}
 
 	return func(dbName string) (*dbx.DB, error) {
 		fmt.Println("Connecting to DB:", dbName)

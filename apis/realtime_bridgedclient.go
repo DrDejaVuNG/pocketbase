@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
+	"sync"
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/subscriptions"
@@ -50,6 +50,7 @@ var _ IBridgedClient = (*BridgedClient)(nil)
 type BridgedClient struct {
 	subscriptions.Client
 	bridge       IRealtimeBridge
+	mu           sync.RWMutex
 	subscription *ClientSubscription
 }
 
@@ -85,6 +86,10 @@ func NewBridgedClient(bridge IRealtimeBridge, optionalSubscription ...*ClientSub
 }
 
 func (r *BridgedClient) BroadcastGoOffline() {
+	r.mu.RLock()
+	clientId := r.subscription.ClientId
+	r.mu.RUnlock()
+
 	// delete and notify
 	_, err := r.bridge.App().DB().NewQuery(`
 		WITH deleted AS (
@@ -94,7 +99,7 @@ func (r *BridgedClient) BroadcastGoOffline() {
 		)
 		SELECT pg_notify('shared_bridge_channel', 'subscription_delete|' || deleted."clientId") FROM deleted;
 	`).Bind(dbx.Params{
-		"clientId": r.subscription.ClientId,
+		"clientId": clientId,
 	}).Execute()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error deleting subscription:", err)
@@ -120,22 +125,35 @@ func (r *BridgedClient) BroadcastChanges() {
 	r.subscription.UpdatedByChannelId = r.bridge.SelfChannelId()
 
 	// 5. update auth collection and record refs
-	var authSQL string
-	var authParams dbx.Params
-	if record, _ := r.Get(RealtimeClientAuthKey).(*core.Record); record != nil {
-		r.subscription.AuthCollectionRef = record.Collection().Id
-		r.subscription.AuthRecordRef = record.Id
-		authSQL = fmt.Sprintf(`SELECT * FROM {{%s}} WHERE id = {:authRecordRef} LIMIT 1`, record.TableName())
-		authParams = dbx.Params{
-			"authRecordRef": record.Id,
-		}
+
+	r.mu.Lock()
+	// 1. clientId should not be changed
+	// 2. channelId should not be changed
+	// 3. update subscriptions
+	r.subscription.Subscriptions = r.RawSubscriptions()
+
+	// 4. update authRecord
+	authSQL := ""
+	authParams := dbx.Params{}
+	if authRecord, ok := r.Get(RealtimeClientAuthKey).(*core.Record); ok {
+		r.subscription.AuthCollectionRef = authRecord.Collection().Id
+		r.subscription.AuthRecordRef = authRecord.Id
+		authSQL = fmt.Sprintf("SELECT * FROM {{%s}} WHERE [[id]] = {:authRecordId}", authRecord.Collection().Name)
+		authParams["authRecordId"] = authRecord.Id
 	} else {
 		r.subscription.AuthCollectionRef = ""
 		r.subscription.AuthRecordRef = ""
 		authSQL = "SELECT WHERE 1=0" // empty rows.
 	}
-
-	// Update using raw SQL query
+	params := dbx.Params{
+		"clientId":           r.subscription.ClientId,
+		"channelId":          r.subscription.ChannelId,
+		"subscriptions":      r.subscription.Subscriptions,
+		"authCollectionRef":  r.subscription.AuthCollectionRef,
+		"authRecordRef":      r.subscription.AuthRecordRef,
+		"updatedByChannelId": r.subscription.UpdatedByChannelId,
+	}
+	r.mu.Unlock()
 	_, err := r.bridge.App().DB().NewQuery(fmt.Sprintf(`
 		WITH
 			updated AS (
@@ -162,14 +180,7 @@ func (r *BridgedClient) BroadcastChanges() {
 				COALESCE((SELECT row_to_json(a) FROM auth a)::text, '')
 			)
 		);
-	`, authSQL)).Bind(authParams).Bind(dbx.Params{
-		"clientId":           r.subscription.ClientId,
-		"channelId":          r.subscription.ChannelId,
-		"subscriptions":      r.subscription.Subscriptions,
-		"authCollectionRef":  r.subscription.AuthCollectionRef,
-		"authRecordRef":      r.subscription.AuthRecordRef,
-		"updatedByChannelId": r.subscription.UpdatedByChannelId,
-	}).Execute()
+	`, authSQL)).Bind(authParams).Bind(params).Execute()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error updating subscription:", err)
 		return
@@ -196,8 +207,9 @@ func (r *BridgedClient) ReceiveChanges(newSubscription *ClientSubscription, auth
 	}
 	// 5. updatedByChannelId should not be changed
 
-	// Finally, update the subscription
+	r.mu.Lock()
 	r.subscription = newSubscription
+	r.mu.Unlock()
 }
 
 // Send sends the specified message to the client's channel (if not discarded).
@@ -206,9 +218,14 @@ func (r *BridgedClient) Send(m subscriptions.Message) {
 		return
 	}
 
-	if r.IsRemoteClient() {
+	r.mu.RLock()
+	channelId := r.subscription.ChannelId
+	remote := channelId != r.bridge.SelfChannelId()
+	r.mu.RUnlock()
+
+	if remote {
 		// send to sibling servers
-		r.bridge.SendViaBridge(r.subscription.ChannelId, r.Id(), m)
+		r.bridge.SendViaBridge(channelId, r.Id(), m)
 	} else {
 		// send to connected clients
 		r.Client.Send(m)
@@ -216,10 +233,14 @@ func (r *BridgedClient) Send(m subscriptions.Message) {
 }
 
 func (r *BridgedClient) IsRemoteClient() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.subscription.ChannelId != r.bridge.SelfChannelId()
 }
 
 func (r *BridgedClient) ClientSubscription() *ClientSubscription {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.subscription
 }
 
