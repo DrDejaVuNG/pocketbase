@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +44,20 @@ func bindRealtimeApi(app core.App, rg *router.RouterGroup[*core.RequestEvent]) {
 	if app.IsRealtimeBridgeEnabled() {
 		bindRealtimeBridge(app)
 	}
+}
+
+// realtimePingInterval returns the SSE keepalive interval configured via the
+// PB_REALTIME_PING_SECONDS env var (default 30s; 0 disables the keepalive and
+// restores the stock behavior). The ping is required for SSE connections to
+// survive intermediaries with idle timeouts, e.g. Cloudflare's 100s proxy
+// read timeout on non-Enterprise plans.
+func realtimePingInterval() time.Duration {
+	if v := os.Getenv("PB_REALTIME_PING_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 30 * time.Second
 }
 
 func realtimeConnect(e *core.RequestEvent) error {
@@ -127,12 +143,44 @@ func realtimeConnect(e *core.RequestEvent) error {
 		idleTimer := time.NewTimer(ce.IdleTimeout)
 		defer idleTimer.Stop()
 
+		// start an SSE keepalive ticker (if enabled) that periodically writes
+		// a comment line to the stream; comment lines are ignored by SSE
+		// clients per the spec, but they reset intermediary proxies' idle
+		// timeouts (e.g. Cloudflare's 100s proxy read timeout on non-Enterprise
+		// plans) that would otherwise terminate quiet subscriptions.
+		// Note that the ping intentionally does NOT reset the idle timer so
+		// that forgotten subscriptions are still reclaimed as before.
+		pingInterval := realtimePingInterval()
+		var pingC <-chan time.Time
+		if pingInterval > 0 {
+			pingTicker := time.NewTicker(pingInterval)
+			defer pingTicker.Stop()
+			pingC = pingTicker.C
+		}
+
 		for {
 			select {
 			case <-maxTimer.C:
 				cancelRequest()
 			case <-idleTimer.C:
 				cancelRequest()
+			case <-pingC:
+				// bound the ping write so wedged clients are detected instead
+				// of blocking the handler goroutine forever
+				_ = rc.SetWriteDeadline(time.Now().Add(15 * time.Second))
+				_, err := fmt.Fprint(e.Response, ": ping\n\n")
+				if err == nil {
+					err = e.Flush()
+				}
+				if err != nil {
+					ce.App.Logger().Debug(
+						"Realtime connection closed (failed to deliver ping)",
+						slog.String("clientId", ce.Client.Id()),
+						slog.String("error", err.Error()),
+					)
+					return nil
+				}
+				rc.SetWriteDeadline(time.Time{})
 			case msg, ok := <-ce.Client.Channel():
 				if !ok {
 					// channel is closed
