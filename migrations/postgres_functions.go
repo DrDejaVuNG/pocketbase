@@ -1,8 +1,21 @@
 package migrations
 
-import "github.com/pocketbase/dbx"
+import (
+	"strconv"
+	"strings"
 
-func createSQLiteEquivalentFunctions(db dbx.Builder) error {
+	"github.com/pocketbase/dbx"
+)
+
+// advisoryLockKey identifies the caller role (data vs auxiliary database
+// batch). Distinct keys prevent the two init migrations from self-deadlocking
+// when both roles share a single physical database.
+const (
+	advisoryLockKeyData = 723390690
+	advisoryLockKeyAux  = 723390691
+)
+
+func createSQLiteEquivalentFunctions(db dbx.Builder, advisoryLockKey int64) error {
 	//PostgreSQL:
 	// 1. Check existance
 	sql := `SELECT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'uuid_generate_v7');`
@@ -20,7 +33,10 @@ func createSQLiteEquivalentFunctions(db dbx.Builder) error {
 	-- Serialize concurrent bootstraps against the same database.
 	-- CREATE EXTENSION/COLLATION/FUNCTION can deadlock on catalog locks
 	-- when two app instances run this migration simultaneously on a fresh DB.
-	SELECT pg_advisory_xact_lock(723390690);
+	-- lock_timeout ensures a contended/stuck bootstrap fails loudly instead of
+	-- hanging forever (SET LOCAL is scoped to the current transaction only).
+	SET LOCAL lock_timeout = '30s';
+	SELECT pg_advisory_xact_lock(%d);
 
 	-- Enable built-in pgcrypto extension to use gen_random_bytes function
 	CREATE EXTENSION IF NOT EXISTS "pgcrypto";
@@ -293,6 +309,9 @@ AS $$
 	SELECT strftime_impl(p_format, p_timevalue::timestamptz, p_modifiers)
 $$;
 	`
+	// replace the single lock-key placeholder via strings.Replace: the batch
+	// contains other literal % characters (strftime specs) that fmt would eat
+	funcDef = strings.Replace(funcDef, "%d", strconv.FormatInt(advisoryLockKey, 10), 1)
 	_, err := db.NewQuery(funcDef).Execute()
 	return err
 }

@@ -28,7 +28,7 @@ func Register(
 
 func init() {
 	core.SystemMigrations.Register(func(txApp core.App) error {
-		if err := createSQLiteEquivalentFunctions(txApp.DB()); err != nil {
+		if err := createSQLiteEquivalentFunctions(txApp.DB(), advisoryLockKeyData); err != nil {
 			return fmt.Errorf("createSQLiteEquivalentFunctions error: %w", err)
 		}
 

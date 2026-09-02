@@ -9,7 +9,7 @@ import (
 func init() {
 	core.SystemMigrations.Add(&core.Migration{
 		Up: func(txApp core.App) error {
-			if err := createSQLiteEquivalentFunctions(txApp.AuxDB()); err != nil {
+			if err := createSQLiteEquivalentFunctions(txApp.AuxDB(), advisoryLockKeyAux); err != nil {
 				return fmt.Errorf("createSQLiteEquivalentFunctions error: %w", err)
 			}
 
