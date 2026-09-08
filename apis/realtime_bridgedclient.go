@@ -135,7 +135,7 @@ func (r *BridgedClient) BroadcastChanges() {
 	// 4. update authRecord
 	authSQL := ""
 	authParams := dbx.Params{}
-	if authRecord, ok := r.Get(RealtimeClientAuthKey).(*core.Record); ok {
+	if authRecord, ok := r.Get(RealtimeClientAuthKey).(*core.Record); ok && authRecord != nil {
 		r.subscription.AuthCollectionRef = authRecord.Collection().Id
 		r.subscription.AuthRecordRef = authRecord.Id
 		authSQL = fmt.Sprintf("SELECT * FROM {{%s}} WHERE [[id]] = {:authRecordId}", authRecord.Collection().Name)
@@ -143,7 +143,7 @@ func (r *BridgedClient) BroadcastChanges() {
 	} else {
 		r.subscription.AuthCollectionRef = ""
 		r.subscription.AuthRecordRef = ""
-		authSQL = "SELECT WHERE 1=0" // empty rows.
+		authSQL = "SELECT 1 AS x FROM (SELECT 1) AS noop WHERE 1=0" // empty rows.
 	}
 	params := dbx.Params{
 		"clientId":           r.subscription.ClientId,
