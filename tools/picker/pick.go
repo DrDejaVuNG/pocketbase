@@ -3,11 +3,15 @@ package picker
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/pocketbase/pocketbase/tools/search"
 	"github.com/pocketbase/pocketbase/tools/tokenizer"
 )
+
+var ErrInvalidModifierData = errors.New("failed to apply some of the field modifiers for the provided data")
 
 // Pick converts data into a []any, map[string]any, etc. (using json marshal->unmarshal)
 // containing only the fields from the parsed rawFields expression.
@@ -15,6 +19,10 @@ import (
 // rawFields is a comma separated string of the fields to include.
 // Nested fields should be listed with dot-notation.
 // Fields value modifiers are also supported using the `:modifier(args)` format (see Modifiers).
+//
+// In case some data fails to apply against the registered modifiers
+// a wrapped [ErrInvalidModifierData] is returned that you can inspect and
+// decide to ignore or propagate further up the execution chain.
 //
 // Example:
 //
@@ -31,17 +39,22 @@ func Pick(data any, rawFields string) (any, error) {
 	// json value that we can further operate on.
 	//
 	// Note that invalid UTF8 characters are mangled for compatibility
-	// with earlier versions and to prevent unnecessery causing an error.
+	// with earlier versions and to prevent unnecessary causing an error.
+	//
+	// Duplicated keys are also enabled for just in case of old jsonv1 data
+	// (new db entries are usually validated against the jsonv2 semantics).
 	//
 	// @todo research other approaches to avoid the double serialization
 	// ---
-	encoded, err := json.Marshal(data, jsontext.AllowInvalidUTF8(true))
+	encoded, err := json.Marshal(data, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
 	if err != nil {
 		return nil, err
 	}
 
 	var decoded any
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
+
+	err = json.Unmarshal(encoded, &decoded, jsontext.AllowDuplicateNames(true))
+	if err != nil {
 		return nil, err
 	}
 	// ---
@@ -55,10 +68,16 @@ func Pick(data any, rawFields string) (any, error) {
 
 	if isSearchResult {
 		if decodedMap, ok := decoded.(map[string]any); ok {
-			pickParsedFields(decodedMap["items"], parsedFields)
+			err = pickParsedFields(decodedMap["items"], parsedFields)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrInvalidModifierData, err)
+			}
 		}
 	} else {
-		pickParsedFields(decoded, parsedFields)
+		err = pickParsedFields(decoded, parsedFields)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidModifierData, err)
+		}
 	}
 
 	return decoded, nil
@@ -94,7 +113,10 @@ func parseFields(rawFields string) (map[string]Modifier, error) {
 func pickParsedFields(data any, fields map[string]Modifier) error {
 	switch v := data.(type) {
 	case map[string]any:
-		pickMapFields(v, fields)
+		err := pickMapFields(v, fields)
+		if err != nil {
+			return err
+		}
 	case []map[string]any:
 		for _, item := range v {
 			if err := pickMapFields(item, fields); err != nil {
@@ -112,7 +134,7 @@ func pickParsedFields(data any, fields map[string]Modifier) error {
 
 		for _, item := range v {
 			if err := pickMapFields(item.(map[string]any), fields); err != nil {
-				return nil
+				return err
 			}
 		}
 	}

@@ -153,6 +153,7 @@ window.app.components.recordsList = function(propsArg = {}) {
             });
 
             if (result.page == 1) {
+                props.suggestReset = false;
                 clearList();
             }
 
@@ -318,7 +319,14 @@ window.app.components.recordsList = function(propsArg = {}) {
 
             clearTimeout(deleteRefreshTimeoutId);
             deleteRefreshTimeoutId = setTimeout(() => {
-                if (!data.records?.length) {
+                if (
+                    // no more client-side records
+                    !data.records?.length
+                    // has cascade self-reference field
+                    || !!props.collection?.fields?.find((f) => {
+                        return f.type == "relation" && f.cascadeDelete && f.collectionId == props.collection.id;
+                    })
+                ) {
                     loadRecords(true);
                 }
             }, 100);

@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -1333,7 +1334,9 @@ func (m Record) MarshalJSON() ([]byte, error) {
 	return json.Marshal(
 		m.PublicExport(),
 		json.Deterministic(true),
-		// to preserve the old jsonv1 behavior in case of invalid data
+		// for compliance with old data (and slightly better performance)
+		jsontext.AllowDuplicateNames(true),
+		// preserve the old jsonv1 behavior in case of invalid data
 		jsontext.AllowInvalidUTF8(true),
 	)
 }
@@ -1532,12 +1535,14 @@ func cascadeRecordDelete(app App, mainRecord *Record, refs map[*Collection][]Fie
 			continue // skip missing or view collections
 		}
 
-		recordTableName := inflector.Columnify(refCollection.Name)
+		refTableName := inflector.Columnify(refCollection.Name)
 
 		for _, field := range fields {
-			prefixedFieldName := recordTableName + "." + inflector.Columnify(field.GetName())
+			prefixedFieldName := refTableName + "." + inflector.Columnify(field.GetName())
 
-			query := app.RecordQuery(refCollection)
+			// fetch only the related ids because they will be queried anyway right
+			// before delete to ensure that we are working with fresh record data
+			query := app.DB().Select(refTableName + ".id").From(refTableName)
 
 			if opt, ok := field.(MultiValuer); !ok || !opt.IsMultiple() {
 				query.AndWhere(dbx.HashExp{prefixedFieldName: mainRecord.Id})
@@ -1556,23 +1561,24 @@ func cascadeRecordDelete(app App, mainRecord *Record, refs map[*Collection][]Fie
 			}
 
 			if refCollection.Id == mainRecord.Collection().Id {
-				query.AndWhere(dbx.Not(dbx.HashExp{recordTableName + ".id": mainRecord.Id}))
+				query.AndWhere(dbx.Not(dbx.HashExp{refTableName + ".id": mainRecord.Id}))
 			}
 
 			// trigger cascade for each batchSize rel items until there is none
-			batchSize := 4000
-			rows := make([]*Record, 0, batchSize)
+			batchSize := 8000
+			refIds := make([]string, 0, batchSize)
 			for {
-				if err := query.Limit(int64(batchSize)).All(&rows); err != nil {
+				err := query.Limit(int64(batchSize)).Column(&refIds)
+				if err != nil {
 					return err
 				}
 
-				total := len(rows)
+				total := len(refIds)
 				if total == 0 {
 					break
 				}
 
-				err := deleteRefRecords(app, mainRecord, rows, field)
+				err = deleteRefRecords(app, mainRecord, refCollection, refIds, field)
 				if err != nil {
 					return err
 				}
@@ -1581,7 +1587,7 @@ func cascadeRecordDelete(app App, mainRecord *Record, refs map[*Collection][]Fie
 					break // no more items
 				}
 
-				rows = rows[:0] // keep allocated memory
+				refIds = refIds[:0] // keep allocated memory
 			}
 		}
 	}
@@ -1594,13 +1600,21 @@ func cascadeRecordDelete(app App, mainRecord *Record, refs map[*Collection][]Fie
 // just unset the record id from any relation field values (if they are not required).
 //
 // NB! This method is expected to be called from inside of a transaction.
-func deleteRefRecords(app App, mainRecord *Record, refRecords []*Record, field Field) error {
+func deleteRefRecords(app App, mainRecord *Record, refCollection *Collection, refIds []string, field Field) error {
 	relField, _ := field.(*RelationField)
 	if relField == nil {
 		return errors.New("only RelationField is supported at the moment, got " + field.Type())
 	}
 
-	for _, refRecord := range refRecords {
+	for _, refId := range refIds {
+		refRecord, err := app.FindRecordById(refCollection, refId)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue // already deleted
+			}
+			return err
+		}
+
 		ids := refRecord.GetStringSlice(relField.Name)
 
 		// unset the record id

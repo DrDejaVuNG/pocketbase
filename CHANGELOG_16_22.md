@@ -2,6 +2,24 @@
 > For the most recent versions, please refer to [CHANGELOG.md](./CHANGELOG.md)
 ---
 
+## v0.22.55
+
+- (_Backported from v0.40.3_) Fixed collection index validator to allow expressions with parenthesis in the optional `WHERE` clause.
+
+- (_Backported from v0.40.3_) Fixed nested cascade delete of self-referenced relation records.
+
+- (_Backported from v0.40.3_) Bumped `golang.org/x/*` dependencies to silence security scanners ([#7829](https://github.com/pocketbase/pocketbase/discussions/7829)).
+
+
+## v0.22.54
+
+- (_Backported from v0.40.2_) Bumped goja and its related dependencies _(regex unescaped dash error fix and base64 optimizations)_.
+
+- (_Backported from v0.40.2_) Return an error when filter params fallback fails to json serialize and optimized params replacement to execute in a single pass.
+
+- (_Backported from v0.40.2_) Bumped the min Go GitHub action version to 1.27.1 as it includes some [minor `database/sql` and `enconding/json/v2` bug fixes](https://github.com/golang/go/issues?q=milestone%3AGo1.27.1).
+
+
 ## v0.22.53
 
 - Workaround `encoding/json` infinite recursion when used with Go 1.27 ([#7808](https://github.com/pocketbase/pocketbase/issues/7808)).

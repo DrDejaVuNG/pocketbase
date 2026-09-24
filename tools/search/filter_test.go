@@ -3,6 +3,7 @@ package search_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -198,10 +199,10 @@ func TestFilterDataBuildExpr(t *testing.T) {
 			"geoDistance(1,2,3,4) < 567",
 			false,
 			/* SQLite:
-			"(6371 * acos(cos(radians({:TEST})) * cos(radians({:TEST})) * cos(radians({:TEST}) - radians({:TEST})) + sin(radians({:TEST})) * sin(radians({:TEST})))) < {:TEST}",
+			"(6371 * acos(min(1, max(-1, cos(radians({:TEST})) * cos(radians({:TEST})) * cos(radians({:TEST}) - radians({:TEST})) + sin(radians({:TEST})) * sin(radians({:TEST})))))) < {:TEST}",
 			*/
 			// PostgreSQL:
-			`(6371 * acos(cos(radians(2)) * cos(radians(4)) * cos(radians(3) - radians(1)) + sin(radians(2)) * sin(radians(4)))) < 567`,
+			`(6371 * acos(LEAST(1, GREATEST(-1, cos(radians(2)) * cos(radians(4)) * cos(radians(3) - radians(1)) + sin(radians(2)) * sin(radians(4)))))) < 567`,
 		},
 	}
 
@@ -306,11 +307,43 @@ func TestFilterDataBuildExprWithParams(t *testing.T) {
 	}
 
 	// PostgreSQL:
-	expectedQuery := `SELECT * WHERE ([[test1]] = TRUE OR [[test2]] = FALSE OR [[test3a]] = 123.456 OR [[test3b]] = 123.456 OR ([[test4]]::text = '' OR [[test4]] IS NULL) OR [[test5]] = '""' OR [[test6]] = 'simple' OR [[test7]] = '''single_quotes''' OR [[test8]] = '"double_quotes"' OR [[test9]] = '''"quote_with_backslash\' OR [[test10]] = '2023-01-01 00:00:00 +0000 UTC' OR [[test11]] = '["a","''quote","\"quote"]' OR [[test12]] = '{"a":123,"b":"quote\""}' OR [[test13]] = 'a`
+	expectedQuery := `SELECT * WHERE ([[test1]] = TRUE OR [[test2]] = FALSE OR [[test3a]] = 123.456 OR [[test3b]] = 123.456 OR ([[test4]]::text = '' OR [[test4]] IS NULL) OR ([[test5]]::text = '' OR [[test5]] IS NULL) OR [[test6]] = 'simple' OR [[test7]] = '''single_quotes''' OR [[test8]] = '"double_quotes"' OR [[test9]] = '''"quote_with_backslash\' OR [[test10]] = '2023-01-01 00:00:00 +0000 UTC' OR [[test11]] = '["a","''quote","\"quote"]' OR [[test12]] = '{"a":123,"b":"quote\""}' OR [[test13]] = 'a`
 	expectedQuery += "\nb')"
 	if expectedQuery != calledQueries[0] {
 		t.Fatalf("Expected query \n%s, \ngot \n%s", expectedQuery, calledQueries[0])
 	}
+}
+
+type brokenJSON struct{}
+
+func (j brokenJSON) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("test_error")
+}
+
+func TestFilterDataBuildExprWithParamsFallbackError(t *testing.T) {
+	t.Parallel()
+
+	resolver := search.NewSimpleFieldResolver("test")
+
+	filter := search.FilterData(`test = {:test}`)
+
+	t.Run("non-string type but valid json", func(t *testing.T) {
+		_, err := filter.BuildExpr(resolver, dbx.Params{
+			"test": map[string]any{"a": "123"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("non-string type but invalid json", func(t *testing.T) {
+		_, err := filter.BuildExpr(resolver, dbx.Params{
+			"test": brokenJSON{},
+		})
+		if err == nil {
+			t.Fatal("Expected filter build error, got nil")
+		}
+	})
 }
 
 func TestFilterDataBuildExprWithLimit(t *testing.T) {

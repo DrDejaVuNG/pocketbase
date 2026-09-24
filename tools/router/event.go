@@ -187,25 +187,33 @@ const jsonFieldsParam = "fields"
 // it should result in a JSON response like: `{"a":1, "b": 2}`.
 //
 // Note that invalid UTF8 characters are mangled for compatibility
-// with earlier versions and to prevent unnecessery causing a response error.
+// with earlier versions and to prevent unnecessary causing a response error.
 func (e *Event) JSON(status int, data any) error {
+	// try to pick only the requested fields (currently allowed only for "success" responses)
+	rawFields := e.Request.URL.Query().Get(jsonFieldsParam)
+	if rawFields != "" && status >= 200 && status <= 299 {
+		modified, err := picker.Pick(data, rawFields)
+		if err == nil {
+			data = modified
+		} else if !errors.Is(err, picker.ErrInvalidModifierData) {
+			// @todo ignore for now modifier data errors to avoid introducing
+			// breaking changes but once the router is merged with core consider
+			// at least logging for dev purposes
+			return err
+		}
+	}
+
 	e.setResponseHeaderIfEmpty(headerContentType, "application/json")
 	e.Response.WriteHeader(status)
 
-	rawFields := e.Request.URL.Query().Get(jsonFieldsParam)
-
-	// error response or no fields to pick
-	if rawFields == "" || status < 200 || status > 299 {
-		return json.MarshalWrite(e.Response, data, jsontext.AllowInvalidUTF8(true))
-	}
-
-	// pick only the requested fields
-	modified, err := picker.Pick(data, rawFields)
-	if err != nil {
-		return err
-	}
-
-	return json.MarshalWrite(e.Response, modified, jsontext.AllowInvalidUTF8(true))
+	return json.MarshalWrite(
+		e.Response,
+		data,
+		// for compliance with old data (and slightly better performance)
+		jsontext.AllowDuplicateNames(true),
+		// preserve the old jsonv1 behavior in case of invalid data
+		jsontext.AllowInvalidUTF8(true),
+	)
 }
 
 // XML writes an XML response.

@@ -11,8 +11,8 @@ var (
 	// PostgreSQL: indexdef from pg_indexes also contains the optional
 	// `USING <method>` access method clause, e.g.
 	// CREATE INDEX idx ON public.tbl USING btree (col)
-	indexRegex       = regexp.MustCompile(`(?im)create\s+(unique\s+)?\s*index\s*(if\s+not\s+exists\s+)?(\S*)\s+on\s+(\S*)\s*(?:using\s+\w+\s*)?\(([\s\S]*)\)(?:\s+where\s+([\s\S]*))?`)
-	indexColumnRegex = regexp.MustCompile(`(?im)^([\s\S]+?)(?:\s+collate\s+([\w]+))?(?:\s+(asc|desc))?$`)
+	indexRegex       = regexp.MustCompile(`(?i)\s*create\s+(unique\s+)?\s*index\s*(if\s+not\s+exists\s+)?(\S*)\s+on\s+(\S*)\s*(?:using\s+\w+\s*)?\(([\s\S]*?)\)(?:\s+where\s+([\s\S]*?))?\s*$`)
+	indexColumnRegex = regexp.MustCompile(`(?i)^([\s\S]+?)(?:\s+collate\s+([\w]+))?(?:\s+(asc|desc))?\s*$`)
 )
 
 // IndexColumn represents a single parsed SQL index column.
@@ -159,11 +159,12 @@ func ParseIndex(createIndexExpr string) Index {
 	nameTk.Separators('.')
 
 	nameParts, _ := nameTk.ScanAll()
-	if len(nameParts) == 2 {
+	switch len(nameParts) {
+	case 1:
+		result.IndexName = strings.Trim(nameParts[0], trimChars)
+	case 2:
 		result.SchemaName = strings.Trim(nameParts[0], trimChars)
 		result.IndexName = strings.Trim(nameParts[1], trimChars)
-	} else {
-		result.IndexName = strings.Trim(nameParts[0], trimChars)
 	}
 
 	// TableName
@@ -195,6 +196,11 @@ func ParseIndex(createIndexExpr string) Index {
 			Collate: strings.TrimSpace(colMatches[2]),
 			Sort:    strings.ToUpper(colMatches[3]),
 		})
+	}
+
+	if len(rawColumns) != len(result.Columns) {
+		// unset to trigger validation error
+		result.Columns = []IndexColumn{}
 	}
 
 	// WHERE expression

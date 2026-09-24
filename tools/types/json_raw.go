@@ -7,6 +7,8 @@ import (
 	"errors"
 )
 
+// @todo consider deprecating in favour of jsontext.Value
+
 // JSONRaw defines a json value type that is safe for db read/write.
 type JSONRaw []byte
 

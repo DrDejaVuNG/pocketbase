@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -667,22 +666,11 @@ func init() {
 }
 
 func marhshalWithoutEscape(v any, prefix string, indent string) ([]byte, error) {
-	raw, err := json.Marshal(v,
-		json.Deterministic(true),
+	return json.Marshal(v,
 		jsontext.WithIndentPrefix(prefix),
 		jsontext.WithIndent(indent),
+		json.Deterministic(true),
 	)
-	if err != nil {
-		return nil, err
-	}
-
-	// unescape escaped unicode characters
-	unescaped, err := strconv.Unquote(strings.ReplaceAll(strconv.Quote(string(raw)), `\\u`, `\u`))
-	if err != nil {
-		return nil, err
-	}
-
-	return []byte(unescaped), nil
 }
 
 func escapeBacktick(v string) string {

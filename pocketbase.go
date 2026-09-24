@@ -253,7 +253,7 @@ func (pb *PocketBase) Execute() error {
 	event := new(core.TerminateEvent)
 	event.App = pb
 	return pb.OnTerminate().Trigger(event, func(e *core.TerminateEvent) error {
-		return errors.Join(e.App.ResetBootstrapState(), execErr)
+		return errors.Join(e.App.ClearBootstrap(), execErr)
 	})
 }
 

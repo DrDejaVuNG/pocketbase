@@ -2,12 +2,15 @@
 
 PocketBase with PostgreSQL is a production-grade fork of [PocketBase](https://pocketbase.io) that replaces the embedded SQLite database with native **PostgreSQL (v17+)** support, horizontal scaling across multiple nodes, and distributed realtime events via PostgreSQL `LISTEN/NOTIFY`.
 
-The codebase is kept synchronized with upstream `pocketbase/pocketbase` releases (currently tracking **v0.40.1**).
+The codebase is kept synchronized with upstream `pocketbase/pocketbase` releases (currently tracking **v0.40.4**).
 
 ### Versioning Strategy
 - Releases tracking upstream releases directly: `v<upstream_version>` (e.g. `v0.40.1`).
 - Fork-specific PostgreSQL bug fixes and patches: `v<upstream_version>-hotfix<N>` (e.g. `v0.40.1-hotfix1`).
   This avoids colliding with future official PocketBase releases while keeping upstream lineage explicit.
+- Sync gotcha: `git fetch upstream --tags` brings upstream tags with the same names the fork later uses
+  for its own releases (e.g. upstream's `v0.40.4`). When tagging the fork release, re-point the local tag
+  at the fork's merge commit (`git tag -f v0.40.4 <merge-commit>`); never push the upstream-pointing tag.
 ---
 
 ## Tech Stack

@@ -1,3 +1,50 @@
+## v0.40.4
+
+- Fixed migration deadlock if a logs db write happens to run while the migration is still executing ([#7836](https://github.com/pocketbase/pocketbase/issues/7836)).
+
+- `app.ResetBootstrapState()` was soft-deprecated in favour of `app.ClearBootstrap()`.
+    _Additionally a new `app.OnClearBootstrap()` hook was added to allow clearing custom allocated `OnBootstrap` resources in case the app uses a non-standard initialization (e.g. doesn't call `Start()` or intentionally skip the `OnTerminate` hook)._
+
+- Bumped `golang.org/x/*` dependencies.
+
+
+## v0.40.3
+
+- Write the status header for JSON responses only if the fields picker succeed or has acceptable fallback.
+    _This is to allow custom response status code for failed json writes._
+
+- Fixed collection index validator to allow expressions with parenthesis in the optional `WHERE` clause.
+
+- Clamped arccosine to [-1,1] in the Harvesine formula for the `geoDistance()` filter function to workaround edge case related to float rounding errors for some coordinates.
+
+- Prevent unnecessary body chunk read if we already known that we are beyond the allowed limit.
+
+- Updated the `json` field validator to check the `encoding/json/v2` semantics and allow duplicated keys on record marshalize for compliance with old jsonv1 data.
+
+- Fixed nested cascade delete of self-referenced relation records.
+
+- Minor UI fixes (updated dark primary btn color contrast, force reload the records list if the deleted record has self-referenced cascade relation field, etc.).
+
+- Changed JSVM `$app` variable definition from TS type to interface ([#7834](https://github.com/pocketbase/pocketbase/issues/7834)).
+
+- Bumped `golang.org/x/*` dependencies to silence security scanners ([#7829](https://github.com/pocketbase/pocketbase/discussions/7829)).
+
+
+## v0.40.2
+
+- Return an error when filter params fallback fails to json serialize and optimized params replacement to execute in a single pass.
+
+- Fixed collection index parsing error for indexes with missing name.
+
+- Minor UI autocomplete optimizations _(prefix match, autocomplete debounce, etc.)_.
+
+- Fixed linter warnings and comment typos.
+
+- Bumped goja and its related dependencies _(regex unescaped dash error fix and base64 optimizations)_.
+
+- Bumped the min Go GitHub action version to 1.27.1 as it includes some [minor `database/sql` and `enconding/json/v2` bug fixes](https://github.com/golang/go/issues?q=milestone%3AGo1.27.1).
+
+
 ## v0.40.1
 
 - Fixes for some reported regressions related to the `encoding/json/v2` update:

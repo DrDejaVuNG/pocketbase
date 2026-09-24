@@ -43,9 +43,9 @@ func (t *TestApp) Cleanup() {
 	event.App = t
 
 	t.OnTerminate().Trigger(event, func(e *core.TerminateEvent) error {
+		t.ClearBootstrap()
 		t.TestMailer.Reset()
 		t.ResetEventCalls()
-		t.ResetBootstrapState()
 
 		return e.Next()
 	})
@@ -160,6 +160,14 @@ func NewTestAppWithConfig(config core.BaseAppConfig) (*TestApp, error) {
 	t.OnBootstrap().Bind(&hook.Handler[*core.BootstrapEvent]{
 		Func: func(e *core.BootstrapEvent) error {
 			t.registerEventCall("OnBootstrap")
+			return e.Next()
+		},
+		Priority: -99999,
+	})
+
+	t.OnBootstrapClear().Bind(&hook.Handler[*core.BootstrapEvent]{
+		Func: func(e *core.BootstrapEvent) error {
+			t.registerEventCall("OnBootstrapClear")
 			return e.Next()
 		},
 		Priority: -99999,

@@ -1667,14 +1667,14 @@ const utils = {
         };
 
         const indexRegex =
-            /create\s+(unique\s+)?\s*index\s*(if\s+not\s+exists\s+)?(\S*)\s+on\s+(\S*)\s*\(([\s\S]*)\)(?:\s*where\s+([\s\S]*))?/gim;
+            /\s*create\s+(unique\s+)?\s*index\s*(if\s+not\s+exists\s+)?(\S*)\s+on\s+(\S*)\s*\(([\s\S]*?)\)(?:\s*where\s+([\s\S]*?))?\s*$/gi;
         const matches = indexRegex.exec((idx || "").trim());
 
         if (matches?.length != 7) {
             return result;
         }
 
-        const sqlQuoteRegex = /^[\"\'\`\[\{}]|[\"\'\`\]\}]$/gm;
+        const sqlQuoteRegex = /^[\"\'\`\[\{}]|[\"\'\`\]\}]$/g;
 
         // unique
         result.unique = matches[1]?.trim().toLowerCase() === "unique";
@@ -1697,13 +1697,13 @@ const utils = {
 
         // columns
         const rawColumns = (matches[5] || "")
-            .replace(/,(?=[^\(]*\))/gim, "{PB_TEMP}") // temporary replace comma within expressions for easier splitting
+            .replace(/,(?=[^\(]*\))/gi, "{PB_TEMP}") // temporary replace comma within expressions for easier splitting
             .split(","); // split columns
 
         for (let col of rawColumns) {
             col = col.trim().replaceAll("{PB_TEMP}", ","); // revert temp replacement
 
-            const colRegex = /^([\s\S]+?)(?:\s+collate\s+([\w]+))?(?:\s+(asc|desc))?$/gim;
+            const colRegex = /^([\s\S]+?)(?:\s+collate\s+([\w]+))?(?:\s+(asc|desc))?\s*$/gi;
             const colMatches = colRegex.exec(col);
             if (colMatches?.length != 4) {
                 continue;

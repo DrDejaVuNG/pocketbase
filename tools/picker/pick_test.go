@@ -1,12 +1,27 @@
 package picker_test
 
 import (
+	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"testing"
 
 	"github.com/pocketbase/pocketbase/tools/picker"
 	"github.com/pocketbase/pocketbase/tools/search"
 )
+
+type brokenModifier struct {
+}
+
+func (m *brokenModifier) Modify(val any) (any, error) {
+	return nil, errors.New("test_error")
+}
+
+func init() {
+	picker.Modifiers["broken"] = func(args ...string) (picker.Modifier, error) {
+		return &brokenModifier{}, nil
+	}
+}
 
 func TestPickFields(t *testing.T) {
 	scenarios := []struct {
@@ -224,6 +239,13 @@ func TestPickFields(t *testing.T) {
 			`{"id":"123","rel":{"id":"456","sub":{"id":"789"},"title":"rel_title"}}`,
 		},
 		{
+			"with modifer.Modify error",
+			map[string]any{"a": 1},
+			"*:broken",
+			true,
+			`{"a":1}`,
+		},
+		{
 			"invalid excerpt modifier",
 			map[string]any{"a": 1, "b": 2, "c": "test"},
 			"*:excerpt",
@@ -248,6 +270,13 @@ func TestPickFields(t *testing.T) {
 			false,
 			`{"id":"12","rel":{"title":"rel..."},"title":"lo"}`,
 		},
+		{
+			"jsonv1 values",
+			map[string]any{"a": "test\xc3", "b": jsontext.Value(`{"a":1,"a":2}`)},
+			"a, b",
+			false,
+			`{"a":"test�","b":{"a":2}}`,
+		},
 	}
 
 	for _, s := range scenarios {
@@ -263,7 +292,12 @@ func TestPickFields(t *testing.T) {
 				return
 			}
 
-			serialized, err := json.Marshal(result, json.Deterministic(true))
+			serialized, err := json.Marshal(
+				result,
+				json.Deterministic(true),
+				jsontext.AllowInvalidUTF8(true),
+				jsontext.AllowDuplicateNames(true),
+			)
 			if err != nil {
 				t.Fatal(err)
 			}

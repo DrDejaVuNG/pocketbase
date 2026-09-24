@@ -3,6 +3,7 @@ package router_test
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"encoding/xml"
 	"errors"
@@ -19,7 +20,9 @@ import (
 	"testing"
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
+	"github.com/pocketbase/pocketbase/tools/picker"
 	"github.com/pocketbase/pocketbase/tools/router"
+	"github.com/pocketbase/pocketbase/tools/types"
 )
 
 type unwrapTester struct {
@@ -220,6 +223,8 @@ func TestEventRemoteIP(t *testing.T) {
 }
 
 func TestFindUploadedFiles(t *testing.T) {
+	t.Parallel()
+
 	scenarios := []struct {
 		filename        string
 		expectedPattern string
@@ -273,6 +278,8 @@ func TestFindUploadedFiles(t *testing.T) {
 }
 
 func TestFindUploadedFilesMissing(t *testing.T) {
+	t.Parallel()
+
 	body := new(bytes.Buffer)
 	mp := multipart.NewWriter(body)
 	mp.Close()
@@ -293,6 +300,8 @@ func TestFindUploadedFilesMissing(t *testing.T) {
 }
 
 func TestEventSetGet(t *testing.T) {
+	t.Parallel()
+
 	event := router.Event{}
 
 	// get before any set (ensures that doesn't panic)
@@ -324,6 +333,8 @@ func TestEventSetGet(t *testing.T) {
 }
 
 func TestEventSetAllGetAll(t *testing.T) {
+	t.Parallel()
+
 	data := map[string]any{
 		"a": 123,
 		"b": 456,
@@ -351,6 +362,8 @@ func TestEventSetAllGetAll(t *testing.T) {
 }
 
 func TestEventString(t *testing.T) {
+	t.Parallel()
+
 	scenarios := []testResponseWriteScenario[string]{
 		{
 			name:            "no explicit content-type",
@@ -380,6 +393,8 @@ func TestEventString(t *testing.T) {
 }
 
 func TestEventHTML(t *testing.T) {
+	t.Parallel()
+
 	scenarios := []testResponseWriteScenario[string]{
 		{
 			name:            "no explicit content-type",
@@ -409,14 +424,17 @@ func TestEventHTML(t *testing.T) {
 }
 
 func TestEventJSON(t *testing.T) {
+	t.Parallel()
+
 	body := map[string]any{
 		"a": 123,
 		"b": true,
 		"c": "test",
-		"d": "\xc3", /* invalid utf8 char to test mangling */
+		"d": "\xc3",                         // invalid utf8 char to test mangling
+		"e": types.JSONRaw(`{"a":1,"a":2}`), // duplicated keys to ensure compliance with old data
 	}
 	expectedPickedBody := `{"a":123,"c":"test"}`
-	expectedFullBody := `{"a":123,"b":true,"c":"test","d":"�"}`
+	expectedFullBody := `{"a":123,"b":true,"c":"test","d":"�","e":{"a":2}}`
 
 	scenarios := []testResponseWriteScenario[any]{
 		{
@@ -456,7 +474,93 @@ func TestEventJSON(t *testing.T) {
 	}
 }
 
+func TestEventJSONPickError(t *testing.T) {
+	t.Parallel()
+
+	req, err := http.NewRequest(http.MethodGet, "/?fields=a:excerpt(-1)", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+
+	event := &router.Event{
+		Request:  req,
+		Response: &router.ResponseWriter{ResponseWriter: rec},
+	}
+
+	err = event.JSON(200, map[string]any{"a": "test"})
+	if err == nil {
+		t.Fatal("Expected JSON to return modifier args err, got nil")
+	}
+
+	// ensure that no explicit status code was written yet by attempting to write one
+	// (should do nothing if it was already written)
+	rec.WriteHeader(567)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	if result.StatusCode != 567 {
+		t.Fatalf("Expected custom status code, got %d", result.StatusCode)
+	}
+}
+
+type brokenModifier struct {
+}
+
+func (m *brokenModifier) Modify(val any) (any, error) {
+	return nil, errors.New("test_error")
+}
+
+func TestEventJSONIgnoredError(t *testing.T) {
+	t.Parallel()
+
+	picker.Modifiers["broken_ignore"] = func(args ...string) (picker.Modifier, error) {
+		return &brokenModifier{}, nil
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "/?fields=a:broken_ignore", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+
+	event := &router.Event{
+		Request:  req,
+		Response: &router.ResponseWriter{ResponseWriter: rec},
+	}
+
+	err = event.JSON(200, map[string]any{"a": "test"})
+	if err != nil {
+		t.Fatalf("Expected nil JSON result, got error %v", err)
+	}
+
+	// (should do nothing if it was already written)
+	rec.WriteHeader(567)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	rawBody, err := io.ReadAll(result.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("Expected %d status code, got %d", http.StatusOK, result.StatusCode)
+	}
+
+	expected := `{"a":"test"}`
+	if string(rawBody) != expected {
+		t.Fatalf("Expected json\n%s\ngot\n%s", expected, rawBody)
+	}
+}
+
 func TestEventXML(t *testing.T) {
+	t.Parallel()
+
 	scenarios := []testResponseWriteScenario[string]{
 		{
 			name:            "no explicit content-type",
@@ -486,6 +590,8 @@ func TestEventXML(t *testing.T) {
 }
 
 func TestEventStream(t *testing.T) {
+	t.Parallel()
+
 	scenarios := []testResponseWriteScenario[string]{
 		{
 			name:            "stream",
@@ -506,6 +612,8 @@ func TestEventStream(t *testing.T) {
 }
 
 func TestEventBlob(t *testing.T) {
+	t.Parallel()
+
 	scenarios := []testResponseWriteScenario[[]byte]{
 		{
 			name:            "blob",
@@ -526,6 +634,8 @@ func TestEventBlob(t *testing.T) {
 }
 
 func TestEventNoContent(t *testing.T) {
+	t.Parallel()
+
 	s := testResponseWriteScenario[any]{
 		name:            "no content",
 		status:          234,
@@ -542,6 +652,8 @@ func TestEventNoContent(t *testing.T) {
 }
 
 func TestEventFlush(t *testing.T) {
+	t.Parallel()
+
 	rec := httptest.NewRecorder()
 
 	event := &router.Event{
@@ -556,6 +668,8 @@ func TestEventFlush(t *testing.T) {
 }
 
 func TestEventRedirect(t *testing.T) {
+	t.Parallel()
+
 	scenarios := []testResponseWriteScenario[any]{
 		{
 			name:           "non-30x status",
@@ -580,6 +694,8 @@ func TestEventRedirect(t *testing.T) {
 }
 
 func TestEventFileFS(t *testing.T) {
+	t.Parallel()
+
 	// stub test files
 	// ---
 	dir, err := os.MkdirTemp("", "EventFileFS")
@@ -676,6 +792,8 @@ func TestEventFileFS(t *testing.T) {
 }
 
 func TestEventError(t *testing.T) {
+	t.Parallel()
+
 	err := new(router.Event).Error(123, "message_test", map[string]any{"a": validation.Required, "b": "test"})
 
 	result, _ := json.Marshal(err, json.Deterministic(true))
@@ -687,6 +805,8 @@ func TestEventError(t *testing.T) {
 }
 
 func TestEventBadRequestError(t *testing.T) {
+	t.Parallel()
+
 	err := new(router.Event).BadRequestError("message_test", map[string]any{"a": validation.Required, "b": "test"})
 
 	result, _ := json.Marshal(err, json.Deterministic(true))
@@ -698,6 +818,8 @@ func TestEventBadRequestError(t *testing.T) {
 }
 
 func TestEventNotFoundError(t *testing.T) {
+	t.Parallel()
+
 	err := new(router.Event).NotFoundError("message_test", map[string]any{"a": validation.Required, "b": "test"})
 
 	result, _ := json.Marshal(err, json.Deterministic(true))
@@ -709,6 +831,8 @@ func TestEventNotFoundError(t *testing.T) {
 }
 
 func TestEventForbiddenError(t *testing.T) {
+	t.Parallel()
+
 	err := new(router.Event).ForbiddenError("message_test", map[string]any{"a": validation.Required, "b": "test"})
 
 	result, _ := json.Marshal(err, json.Deterministic(true))
@@ -720,6 +844,8 @@ func TestEventForbiddenError(t *testing.T) {
 }
 
 func TestEventUnauthorizedError(t *testing.T) {
+	t.Parallel()
+
 	err := new(router.Event).UnauthorizedError("message_test", map[string]any{"a": validation.Required, "b": "test"})
 
 	result, _ := json.Marshal(err, json.Deterministic(true))
@@ -731,6 +857,8 @@ func TestEventUnauthorizedError(t *testing.T) {
 }
 
 func TestEventTooManyRequestsError(t *testing.T) {
+	t.Parallel()
+
 	err := new(router.Event).TooManyRequestsError("message_test", map[string]any{"a": validation.Required, "b": "test"})
 
 	result, _ := json.Marshal(err, json.Deterministic(true))
@@ -742,6 +870,8 @@ func TestEventTooManyRequestsError(t *testing.T) {
 }
 
 func TestEventInternalServerError(t *testing.T) {
+	t.Parallel()
+
 	err := new(router.Event).InternalServerError("message_test", map[string]any{"a": validation.Required, "b": "test"})
 
 	result, _ := json.Marshal(err, json.Deterministic(true))
@@ -753,6 +883,8 @@ func TestEventInternalServerError(t *testing.T) {
 }
 
 func TestEventBindBody(t *testing.T) {
+	t.Parallel()
+
 	type testDstStruct struct {
 		A int    `json:"a" xml:"a" form:"a"`
 		B int    `json:"b" xml:"b" form:"b"`
@@ -945,9 +1077,9 @@ func testEventResponseWrite[T any](
 		// try to deserialize into a map and then serialize again in a
 		// deterministic manner in case it is json
 		var jsonBody any
-		err = json.Unmarshal(rawBody, &jsonBody)
+		err = json.Unmarshal(rawBody, &jsonBody, jsontext.AllowDuplicateNames(true))
 		if err == nil {
-			normalized, err := json.Marshal(jsonBody, json.Deterministic(true))
+			normalized, err := json.Marshal(jsonBody, json.Deterministic(true), jsontext.AllowDuplicateNames(true))
 			if err != nil {
 				t.Fatalf("Failed to deterministicly serialize json body\n%s\ngot\n%v", jsonBody, err)
 			}
