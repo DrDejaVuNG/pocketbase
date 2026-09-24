@@ -5,17 +5,20 @@ PocketBase with PostgreSQL is a production-grade fork of [PocketBase](https://po
 The codebase is kept synchronized with upstream `pocketbase/pocketbase` releases (currently tracking **v0.40.4**).
 
 ### Versioning Strategy
-- Fork release tags are namespaced with `pg-` so they can never collide with upstream
-  `pocketbase/pocketbase` tags (agreed 2026-09-24; releases before that date used bare upstream
-  version names, e.g. `v0.40.1`, which stay as historical record).
-- Upstream sync releases: `pg-v<upstream_version>` (e.g. `pg-v0.40.4`) — upstream `<upstream_version>`
-  plus the PostgreSQL port as of that merge.
-- Fork-only fixes between syncs: `pg-v<upstream_version>.<N>` (e.g. `pg-v0.40.4.1`) — the trailing
-  `.N` is the fork patch ordinal on that base and resets when the upstream base changes.
+- Fork release tags carry a `-pg` semver suffix so they can never collide with upstream
+  `pocketbase/pocketbase` tags while staying valid semver for goreleaser (agreed 2026-09-24;
+  releases before that date used bare upstream version names, e.g. `v0.40.1`, which stay as
+  historical record).
+- Upstream sync releases: `v<upstream_version>-pg` (e.g. `v0.40.4-pg`) — upstream
+  `<upstream_version>` plus the PostgreSQL port as of that merge.
+- Fork-only fixes between syncs: `v<upstream_version>-pg.<N>` (e.g. `v0.40.4-pg.1`) — the `.N`
+  ordinal is the fork patch number on that base and resets when the upstream base changes.
 - No re-point handling is needed anymore: upstream tags fetched via `git fetch upstream --tags`
   coexist harmlessly under their own names.
-- Note: goreleaser injects the tag into `pocketbase.Version` via ldflags, so release binaries
-  self-identify as `pg-v...`; nothing in the codebase parses that string.
+- Note: goreleaser requires semver tags (a `pg-v...` prefix fails its tag parsing), so the suffix
+  form is mandatory. Semver ordering places `-pg` below the bare upstream release; nothing in the
+  tooling compares the two, and `pocketbase.Version` (ldflags-injected, purely informational)
+  self-identifies binaries as `...-pg`.
 ---
 
 ## Tech Stack
