@@ -5,12 +5,17 @@ PocketBase with PostgreSQL is a production-grade fork of [PocketBase](https://po
 The codebase is kept synchronized with upstream `pocketbase/pocketbase` releases (currently tracking **v0.40.4**).
 
 ### Versioning Strategy
-- Releases tracking upstream releases directly: `v<upstream_version>` (e.g. `v0.40.1`).
-- Fork-specific PostgreSQL bug fixes and patches: `v<upstream_version>-hotfix<N>` (e.g. `v0.40.1-hotfix1`).
-  This avoids colliding with future official PocketBase releases while keeping upstream lineage explicit.
-- Sync gotcha: `git fetch upstream --tags` brings upstream tags with the same names the fork later uses
-  for its own releases (e.g. upstream's `v0.40.4`). When tagging the fork release, re-point the local tag
-  at the fork's merge commit (`git tag -f v0.40.4 <merge-commit>`); never push the upstream-pointing tag.
+- Fork release tags are namespaced with `pg-` so they can never collide with upstream
+  `pocketbase/pocketbase` tags (agreed 2026-09-24; releases before that date used bare upstream
+  version names, e.g. `v0.40.1`, which stay as historical record).
+- Upstream sync releases: `pg-v<upstream_version>` (e.g. `pg-v0.40.4`) — upstream `<upstream_version>`
+  plus the PostgreSQL port as of that merge.
+- Fork-only fixes between syncs: `pg-v<upstream_version>.<N>` (e.g. `pg-v0.40.4.1`) — the trailing
+  `.N` is the fork patch ordinal on that base and resets when the upstream base changes.
+- No re-point handling is needed anymore: upstream tags fetched via `git fetch upstream --tags`
+  coexist harmlessly under their own names.
+- Note: goreleaser injects the tag into `pocketbase.Version` via ldflags, so release binaries
+  self-identify as `pg-v...`; nothing in the codebase parses that string.
 ---
 
 ## Tech Stack
