@@ -2,7 +2,9 @@ package apis
 
 import (
 	"net/http"
+	"os"
 	"slices"
+	"strconv"
 
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
@@ -11,6 +13,17 @@ import (
 // bindHealthApi registers the health api endpoint.
 func bindHealthApi(app core.App, rg *router.RouterGroup[*core.RequestEvent]) {
 	subGroup := rg.Group("/health")
+
+	// Successful health checks are usually triggered automatically and
+	// frequently by client SDKs (e.g. connectivity keepalive probes), which
+	// can flood the logs table and dashboard with low-value entries.
+	//
+	// Set PB_HEALTH_LOG_SUCCESS=true to restore logging of the successful
+	// health checks (failed ones are always logged).
+	if logSuccess, _ := strconv.ParseBool(os.Getenv("PB_HEALTH_LOG_SUCCESS")); !logSuccess {
+		subGroup.Bind(SkipSuccessActivityLog())
+	}
+
 	subGroup.GET("", healthCheck)
 }
 
