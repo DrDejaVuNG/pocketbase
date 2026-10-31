@@ -2,6 +2,11 @@ module github.com/pocketbase/pocketbase
 
 go 1.27
 
+// CVE-2026-98432 (Linux kernel): Go 1.24+ opens listeners as MPTCP by default.
+// Keep listeners on plain TCP. Applies only when this module is the main
+// module (examples/base, the Dockerfile build); apps set it in their own go.mod.
+godebug multipathtcp=0
+
 require (
 	github.com/disintegration/imaging v1.6.2
 	github.com/domodwyer/mailyak/v3 v3.6.2
