@@ -42,10 +42,19 @@ var TokenFunctions = map[string]func(
 			resolvedArgs[i] = resolved
 		}
 
+		/* SQLite:
 		lonA := resolvedArgs[0].Identifier
 		latA := resolvedArgs[1].Identifier
 		lonB := resolvedArgs[2].Identifier
 		latB := resolvedArgs[3].Identifier
+		*/
+		// PostgreSQL:
+		// the trigonometric functions don't accept jsonb (eg. geoPoint "loc.lon") or numeric
+		// arguments without an explicit cast so normalize them all to float8
+		lonA := geoDistanceArg(resolvedArgs[0])
+		latA := geoDistanceArg(resolvedArgs[1])
+		lonB := geoDistanceArg(resolvedArgs[2])
+		latB := geoDistanceArg(resolvedArgs[3])
 
 		return &ResolverResult{
 			NullFallback: NullFallbackDisabled,
@@ -195,4 +204,17 @@ func concatUniqueParams(destParams, newParams dbx.Params) error {
 	}
 
 	return nil
+}
+
+// PostgreSQL only:
+// geoDistanceArg casts the resolved geoDistance argument to float8.
+//
+// Non-numeric jsonb values (eg. strings or objects) resolve to NULL
+// instead of failing the entire query.
+func geoDistanceArg(arg *ResolverResult) string {
+	if inferDeterministicType(arg) == "jsonb" {
+		return "(CASE WHEN jsonb_typeof(" + arg.Identifier + ") = 'number' THEN (" + arg.Identifier + ")::float8 END)"
+	}
+
+	return "(" + arg.Identifier + ")::float8"
 }
