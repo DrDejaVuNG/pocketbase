@@ -110,7 +110,11 @@ func (f *AutodateField) ColumnType(app App) string {
 	return "TEXT DEFAULT '' NOT NULL" // note: sqlite doesn't allow adding new columns with non-constant defaults
 	*/
 	// PostgreSQL:
-	return "TIMESTAMP DEFAULT NOW() NOT NULL"
+	// Nullable (similar to DateField) because the zero DateTime value is
+	// stored as explicit NULL, which would violate a NOT NULL constraint
+	// for fields that are not populated on create (onCreate=false).
+	// The default is kept so that existing rows are populated when the column is added.
+	return "TIMESTAMP DEFAULT NOW()"
 }
 
 // PrepareValue implements [Field.PrepareValue] interface method.
