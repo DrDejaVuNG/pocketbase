@@ -1610,6 +1610,7 @@ func (app *BaseApp) initLogger() error {
 			return
 		}
 
+		/* SQLite:
 		// write the accumulated logs
 		//
 		// note: based on several local tests there is no
@@ -1619,9 +1620,7 @@ func (app *BaseApp) initLogger() error {
 			model := &Log{}
 			for _, l := range logs {
 				model.MarkAsNew()
-				// PostgreSQL: the _logs table uses a uuid PK
-				// (GenerateDefaultRandomId would fail the uuid column type)
-				model.Id = GenerateNewUUIDV7()
+				model.Id = GenerateDefaultRandomId()
 				model.Level = int(l.Level)
 				model.Message = l.Message
 				model.Data = l.Data
@@ -1634,6 +1633,44 @@ func (app *BaseApp) initLogger() error {
 
 			return nil
 		})
+		*/
+		// PostgreSQL:
+		// A failed INSERT aborts the whole transaction (every following
+		// statement fails with 25P02 and COMMIT rolls back), so a single bad
+		// row would drop the entire batch. Write the batch in one transaction
+		// and, if it fails, retry row by row so that only the failing rows
+		// are skipped.
+		newLogModel := func(l *logger.Log) *Log {
+			model := &Log{}
+			// the _logs table uses a uuid PK
+			// (GenerateDefaultRandomId would fail the uuid column type)
+			model.Id = GenerateNewUUIDV7()
+			model.Level = int(l.Level)
+			model.Message = l.Message
+			model.Data = l.Data
+			model.Created, _ = types.ParseDateTime(l.Time)
+			return model
+		}
+
+		txErr := app.AuxRunInTransaction(func(txApp App) error {
+			for _, l := range logs {
+				if err := txApp.AuxSave(newLogModel(l)); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		})
+		if txErr == nil {
+			return
+		}
+
+		for _, l := range logs {
+			model := newLogModel(l)
+			if err := app.AuxSave(model); err != nil {
+				log.Println("Failed to write log", model, err)
+			}
+		}
 	}
 
 	handler := logger.NewBatchHandler(logger.BatchOptions{
@@ -1667,7 +1704,6 @@ func (app *BaseApp) initLogger() error {
 			} else {
 				routine.FireAndForget(func() { runLogsWrite(logs) })
 			}
-
 
 			return nil
 		},
