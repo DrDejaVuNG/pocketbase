@@ -15,7 +15,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
@@ -395,23 +394,30 @@ func (t *RealtimeBridge) findOrLoadClient(clientId string) (subscriptions.Client
 	return t.app.SubscriptionsBroker().ClientById(clientId)
 }
 
-var pgTypes = pgtype.NewMap()
-
-const clientRowColumns = `"clientId", "channelId", "subscriptions", "authCollectionRef", "authRecordRef", "updatedByChannelId", "ip", "version"`
+// note: the subscriptions array is selected as JSON to avoid sharing a
+// (non goroutine safe) pgtype.Map between the listeners and the requests
+const clientRowColumns = `"clientId", "channelId", to_json("subscriptions")::text, "authCollectionRef", "authRecordRef", "updatedByChannelId", "ip", "version"`
 
 func scanClientRow(scan func(dest ...any) error) (*ClientSubscription, error) {
 	row := &ClientSubscription{}
+	var subscriptionsJSON string
 	err := scan(
 		&row.ClientId,
 		&row.ChannelId,
-		pgTypes.SQLScanner(&row.Subscriptions),
+		&subscriptionsJSON,
 		&row.AuthCollectionRef,
 		&row.AuthRecordRef,
 		&row.UpdatedByChannelId,
 		&row.IP,
 		&row.Version,
 	)
-	return row, err
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(subscriptionsJSON), &row.Subscriptions); err != nil {
+		return nil, fmt.Errorf("decoding the client subscriptions: %w", err)
+	}
+	return row, nil
 }
 
 func (t *RealtimeBridge) loadClientRow(clientId string) (*ClientSubscription, error) {
