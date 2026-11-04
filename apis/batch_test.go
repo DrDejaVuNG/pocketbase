@@ -2,13 +2,18 @@ package apis_test
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tests"
 	"github.com/pocketbase/pocketbase/tools/router"
+	"github.com/pocketbase/pocketbase/tools/types"
 )
 
 func TestBatchRequest(t *testing.T) {
@@ -759,5 +764,69 @@ func TestBatchRequest(t *testing.T) {
 			}
 		}
 		scenario.Test(t)
+	}
+}
+
+func TestBatchConcurrentIncrements(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	app.Settings().Batch.Enabled = true
+	app.Settings().Batch.MaxRequests = 10
+	app.Settings().Batch.Timeout = 30
+
+	collection := core.NewBaseCollection("batch_counters")
+	collection.UpdateRule = types.Pointer("")
+	collection.Fields.Add(&core.NumberField{Name: "n"})
+	if err := app.Save(collection); err != nil {
+		t.Fatal(err)
+	}
+
+	counter := core.NewRecord(collection)
+	counter.Set("n", 0)
+	if err := app.Save(counter); err != nil {
+		t.Fatal(err)
+	}
+
+	pbRouter, err := apis.NewRouter(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux, err := pbRouter.BuildMux()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"requests":[{"method":"PATCH","url":"/api/collections/batch_counters/records/` + counter.Id + `","body":{"n+":1}}]}`
+
+	const workers = 20
+
+	var successes atomic.Int64
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			req := httptest.NewRequest(http.MethodPost, "/api/batch", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code == http.StatusOK {
+				successes.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+
+	r, err := app.FindRecordById(collection, counter.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if successes.Load() == 0 {
+		t.Fatal("Expected at least 1 successful batch request")
+	}
+	if n := r.GetInt("n"); int64(n) != successes.Load() {
+		t.Fatalf("Lost updates: %d successful batch increments but the counter is %d", successes.Load(), n)
 	}
 }

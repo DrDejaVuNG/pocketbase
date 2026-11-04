@@ -10,9 +10,29 @@ import (
 	"github.com/pocketbase/dbx"
 )
 
+// txSerializationLockKey is the PostgreSQL advisory lock key used to
+// serialize the top-level regular database transactions (see [BaseApp.RunInTransaction]).
+//
+// note: keep it different from the other advisory lock keys used by the app.
+const txSerializationLockKey int64 = 723390700
+
 // RunInTransaction wraps fn into a transaction for the regular app database.
 //
 // It is safe to nest RunInTransaction calls as long as you use the callback's txApp.
+//
+// PostgreSQL: nested calls run inside a SAVEPOINT (on error only the nested
+// changes are rolled back and the outer transaction remains usable).
+//
+// PostgreSQL: to preserve the SQLite single writer semantic (and prevent lost updates
+// on read-modify-write inside fn), the top-level transactions are serialized
+// cluster-wide (for all nodes sharing the same database) with a transaction level
+// advisory lock (pg_advisory_xact_lock) acquired as their first statement.
+// This could be disabled with BaseAppConfig.DisableTxSerialization
+// (or the PB_TX_SERIALIZE=false env variable).
+//
+// Note that calling the root app RunInTransaction (not the callback's txApp) from
+// inside another transaction waits for the lock held by the outer transaction
+// (self-deadlock until the query timeout), similar to upstream SQLite.
 func (app *BaseApp) RunInTransaction(fn func(txApp App) error) error {
 	return app.runInTransaction(app.NonconcurrentDB(), fn, false)
 }
@@ -39,6 +59,15 @@ func (app *BaseApp) runInTransaction(db dbx.Builder, fn func(txApp App) error, i
 	case *dbx.DB:
 		var txApp *BaseApp
 		txErr := txOrDB.Transactional(func(tx *dbx.Tx) error {
+			// PostgreSQL: serialize the regular db transactions
+			// similar to the SQLite single writer connection
+			if !isForAuxDB && !app.config.DisableTxSerialization {
+				_, err := tx.NewQuery("SELECT pg_advisory_xact_lock({:key})").Bind(dbx.Params{"key": txSerializationLockKey}).Execute()
+				if err != nil {
+					return fmt.Errorf("failed to acquire the transaction lock: %w", err)
+				}
+			}
+
 			txApp = app.createTxApp(tx, isForAuxDB)
 			return fn(txApp)
 		})

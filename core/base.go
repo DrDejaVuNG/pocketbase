@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -83,6 +84,12 @@ type BaseAppConfig struct {
 	PostgresAuxDB    string // eg: "pb-auxiliary"
 	IsRealtimeBridge bool
 	IsDev            bool
+
+	// PostgreSQL: DisableTxSerialization disables the cluster-wide serialization
+	// of the top-level RunInTransaction calls (see [BaseApp.RunInTransaction]).
+	//
+	// If not set, it defaults to true when the PB_TX_SERIALIZE env variable is "false".
+	DisableTxSerialization bool
 }
 
 // ensures that the BaseApp implements the App interface.
@@ -267,6 +274,11 @@ func NewBaseApp(config BaseAppConfig) *BaseApp {
 	}
 	if app.config.QueryTimeout <= 0 {
 		app.config.QueryTimeout = DefaultQueryTimeout
+	}
+	if !app.config.DisableTxSerialization {
+		if v, err := strconv.ParseBool(os.Getenv("PB_TX_SERIALIZE")); err == nil && !v {
+			app.config.DisableTxSerialization = true
+		}
 	}
 
 	app.initHooks()

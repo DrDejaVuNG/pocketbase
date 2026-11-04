@@ -3,8 +3,12 @@ package core_test
 import (
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tests"
 )
@@ -827,4 +831,127 @@ func TestRunInTransactionDeepNesting(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestRunInTransactionConcurrentReadModifyWrite(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	collection := core.NewBaseCollection("tx_counters")
+	collection.Fields.Add(&core.NumberField{Name: "n"})
+	if err := app.Save(collection); err != nil {
+		t.Fatal(err)
+	}
+
+	counter := core.NewRecord(collection)
+	counter.Set("n", 0)
+	if err := app.Save(counter); err != nil {
+		t.Fatal(err)
+	}
+
+	const workers = 20
+
+	var successes atomic.Int64
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			err := app.RunInTransaction(func(txApp core.App) error {
+				r, err := txApp.FindRecordById(collection, counter.Id)
+				if err != nil {
+					return err
+				}
+				time.Sleep(5 * time.Millisecond) // simulate some work between the read and the write
+				r.Set("n", r.GetInt("n")+1)
+				return txApp.Save(r)
+			})
+			if err == nil {
+				successes.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+
+	r, err := app.FindRecordById(collection, counter.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if successes.Load() == 0 {
+		t.Fatal("Expected at least 1 successful increment")
+	}
+	if n := r.GetInt("n"); int64(n) != successes.Load() {
+		t.Fatalf("Lost updates: %d successful increments but the counter is %d", successes.Load(), n)
+	}
+}
+
+func TestRunInTransactionSerializationLock(t *testing.T) {
+	// note: not parallel because of t.Setenv
+
+	// counts the transaction serialization advisory locks held by the current db session
+	countLocks := func(t *testing.T, builder dbx.Builder) int {
+		var total int
+		err := builder.NewQuery(`
+			SELECT count(*) FROM pg_locks
+			WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted
+			AND classid = 0 AND objid = 723390700 AND objsubid = 1
+		`).Row(&total)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return total
+	}
+
+	scenarios := []struct {
+		name          string
+		env           string
+		config        bool
+		expectedLocks int
+	}{
+		{"default", "", false, 1},
+		{"PB_TX_SERIALIZE=true", "true", false, 1},
+		{"PB_TX_SERIALIZE=false", "false", false, 0},
+		{"DisableTxSerialization config", "", true, 0},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			t.Setenv("PB_TX_SERIALIZE", s.env)
+
+			app, err := tests.NewTestAppWithConfig(core.BaseAppConfig{DisableTxSerialization: s.config})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer app.Cleanup()
+
+			err = app.RunInTransaction(func(txApp core.App) error {
+				if total := countLocks(t, txApp.DB()); total != s.expectedLocks {
+					t.Fatalf("Expected %d top-level tx locks, got %d", s.expectedLocks, total)
+				}
+
+				// nested calls reuse the outer tx lock
+				return txApp.RunInTransaction(func(nestedApp core.App) error {
+					if total := countLocks(t, nestedApp.DB()); total != s.expectedLocks {
+						t.Fatalf("Expected %d nested tx locks, got %d", s.expectedLocks, total)
+					}
+					return nil
+				})
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// the aux db transactions are never serialized
+			err = app.AuxRunInTransaction(func(txApp core.App) error {
+				if total := countLocks(t, txApp.AuxDB()); total != 0 {
+					t.Fatalf("Expected no aux tx locks, got %d", total)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
