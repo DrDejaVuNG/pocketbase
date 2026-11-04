@@ -108,6 +108,12 @@ func realtimeConnect(e *core.RequestEvent) error {
 			}
 		}()
 
+		// announce the client to the other instances before PB_CONNECT so that its
+		// subscriptions can be submitted through any instance (eg. a non-sticky LB)
+		if syncClient, ok := ce.Client.(IBridgedClient); ok {
+			syncClient.BroadcastChanges()
+		}
+
 		ce.App.Logger().Debug("Realtime connection established", slog.String("clientId", ce.Client.Id()))
 
 		// signalize established connection (aka. fire "connect" message)
@@ -257,6 +263,13 @@ func realtimeSetSubscriptions(e *core.RequestEvent) error {
 	// find subscription client
 	client, err := e.App.SubscriptionsBroker().ClientById(form.ClientId)
 	if err != nil {
+		// the client may be connected to another instance whose online
+		// notification was not processed yet
+		if bridge, ok := e.App.Store().Get(RealtimeBridgeInstanceKey).(*RealtimeBridge); ok {
+			client, err = bridge.findOrLoadClient(form.ClientId)
+		}
+	}
+	if err != nil {
 		return e.NotFoundError("Missing or invalid client id.", err)
 	}
 
@@ -334,9 +347,10 @@ func realtimeUpdateClientsAuth(app core.App, authRecord *core.Record) error {
 						client.Unset(RealtimeClientAuthKey)
 					} else {
 						client.Set(RealtimeClientAuthKey, authRecord)
-						if syncClient, ok := client.(IBridgedClient); ok {
-							syncClient.BroadcastChanges()
-						}
+					}
+					// propagate to the client's instance and to the other mirrors
+					if syncClient, ok := client.(IBridgedClient); ok {
+						syncClient.BroadcastAuthChanges()
 					}
 				}
 			}
@@ -363,7 +377,7 @@ func realtimeUnsetClientsAuthByRecordModelOrProxy(app core.App, authModel core.M
 					clientAuth.Collection().Name == authModel.TableName() {
 					client.Unset(RealtimeClientAuthKey)
 					if syncClient, ok := client.(IBridgedClient); ok {
-						syncClient.BroadcastChanges()
+						syncClient.BroadcastAuthChanges()
 					}
 				}
 			}
@@ -387,6 +401,9 @@ func realtimeUnsetClientsAuthByCollection(app core.App, collection *core.Collect
 				clientAuth, _ := client.Get(RealtimeClientAuthKey).(*core.Record)
 				if clientAuth != nil && clientAuth.Collection().Name == collection.Name {
 					client.Unset(RealtimeClientAuthKey)
+					if syncClient, ok := client.(IBridgedClient); ok {
+						syncClient.BroadcastAuthChanges()
+					}
 				}
 			}
 

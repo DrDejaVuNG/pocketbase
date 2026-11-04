@@ -103,6 +103,8 @@ func (app *BaseApp) FindCollectionByNameOrId(nameOrId string) (*Collection, erro
 //     it'll return the cached Collection state and not the one from the uncommitted transaction.
 //   - The cache is automatically updated on collections db change (create/update/delete).
 //     To manually reload the cache you can call [BaseApp.ReloadCachedCollections].
+//   - On a cache miss the collection is looked up in the database (it may have been
+//     created by another instance) and, if found, the cache is reloaded.
 func (app *BaseApp) FindCachedCollectionByNameOrId(nameOrId string) (*Collection, error) {
 	collections, _ := app.Store().Get(StoreKeyCachedCollections).([]*Collection)
 	if collections == nil {
@@ -115,8 +117,24 @@ func (app *BaseApp) FindCachedCollectionByNameOrId(nameOrId string) (*Collection
 			return c, nil
 		}
 	}
-
+	/* SQLite:
 	return nil, sql.ErrNoRows
+	*/
+	// PostgreSQL: another instance may have created the collection and its
+	// change notification may not have been processed yet
+	collection, err := app.FindCollectionByNameOrId(nameOrId)
+	if err != nil {
+		return nil, err
+	}
+
+	// note: don't cache the uncommitted state of a transaction
+	if !app.IsTransactional() {
+		if err := app.ReloadCachedCollections(); err != nil {
+			app.Logger().Warn("Failed to reload the cached collections", "error", err)
+		}
+	}
+
+	return collection, nil
 }
 
 // FindCollectionReferences returns information for all relation fields

@@ -53,7 +53,14 @@ func oauth2SubscriptionRedirect(e *core.RequestEvent) error {
 		e.App.Logger().Debug("Missing or invalid OAuth2 subscription client", "error", err, "clientId", data.State)
 		return failureRedirect(e)
 	}
-	defer client.Unsubscribe(oauth2SubscriptionTopic)
+	defer func() {
+		client.Unsubscribe(oauth2SubscriptionTopic)
+
+		// the state is one-shot on every instance
+		if syncClient, ok := client.(IBridgedClient); ok {
+			syncClient.BroadcastChanges()
+		}
+	}()
 
 	// additional check to minimize the risk of XSRF attack vectors
 	//
