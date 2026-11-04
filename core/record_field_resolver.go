@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -133,33 +134,40 @@ func NewRecordFieldResolver(
 // Conditionally updates the provided search query based on the
 // resolved fields (eg. dynamically joining relations).
 func (r *RecordFieldResolver) UpdateQuery(query *dbx.SelectQuery) error {
-	if len(r.joins) > 0 {
-		r.updateQueryWithDeduplicateConstraint(query)
+	// PostgreSQL:
+	// the deduplication constraint is applied once at the end because
+	// it needs to know all join aliases (see updateQueryWithDeduplicateConstraint)
+	joinAliases := make([]string, 0, len(r.joins))
 
-		for _, join := range r.joins {
-			query.LeftJoin(
-				(join.TableName + " " + join.TableAlias),
-				join.On,
-			)
-		}
+	for _, join := range r.joins {
+		query.LeftJoin(
+			(join.TableName + " " + join.TableAlias),
+			join.On,
+		)
+		joinAliases = append(joinAliases, join.TableAlias)
 	}
 
 	// note: for now the joins are not applied for multi-match conditions to avoid excessive checks
-	if len(r.listRuleJoins) > 0 {
-		for _, join := range r.listRuleJoins {
-			err := r.updateQueryWithCollectionListRule(join.collection, join.tableAlias, query)
-			if err != nil {
-				return err
-			}
+	for _, join := range r.listRuleJoins {
+		ruleJoinAliases, err := r.updateQueryWithCollectionListRule(join.collection, join.tableAlias, query)
+		if err != nil {
+			return err
 		}
+		joinAliases = append(joinAliases, ruleJoinAliases...)
+	}
+
+	if len(joinAliases) > 0 {
+		r.updateQueryWithDeduplicateConstraint(query, joinAliases)
 	}
 
 	return nil
 }
 
-func (r *RecordFieldResolver) updateQueryWithCollectionListRule(c *Collection, tableAlias string, query *dbx.SelectQuery) error {
+// updateQueryWithCollectionListRule applies the collection ListRule constraint
+// to the query and returns the aliases of the joins added by the rule (if any).
+func (r *RecordFieldResolver) updateQueryWithCollectionListRule(c *Collection, tableAlias string, query *dbx.SelectQuery) ([]string, error) {
 	if r.allowHiddenFields || c == nil || c.ListRule == nil || *c.ListRule == "" {
-		return nil
+		return nil, nil
 	}
 
 	cloneR := *r
@@ -181,7 +189,7 @@ func (r *RecordFieldResolver) updateQueryWithCollectionListRule(c *Collection, t
 	// even if for example "a.name != ''" is true.
 	expr, err := search.FilterData("id='' || (\n" + *c.ListRule + "\n)").BuildExpr(&cloneR)
 	if err != nil {
-		return fmt.Errorf("failed to build %q ListRule join subquery filter expression: %w", c.Name, err)
+		return nil, fmt.Errorf("failed to build %q ListRule join subquery filter expression: %w", c.Name, err)
 	}
 
 	// Bind the extra rule expression at the top query level for performance and security reasons
@@ -193,21 +201,20 @@ func (r *RecordFieldResolver) updateQueryWithCollectionListRule(c *Collection, t
 	// If not feasible - document it as caveat and maybe add --dev log.
 	query.AndWhere(expr)
 
-	if len(cloneR.joins) > 0 {
-		r.updateQueryWithDeduplicateConstraint(query)
-
-		for _, j := range cloneR.joins {
-			query.LeftJoin(
-				(j.TableName + " " + j.TableAlias),
-				j.On,
-			)
-		}
+	joinAliases := make([]string, 0, len(cloneR.joins))
+	for _, j := range cloneR.joins {
+		query.LeftJoin(
+			(j.TableName + " " + j.TableAlias),
+			j.On,
+		)
+		joinAliases = append(joinAliases, j.TableAlias)
 	}
 
-	return nil
+	return joinAliases, nil
 }
 
-func (r *RecordFieldResolver) updateQueryWithDeduplicateConstraint(query *dbx.SelectQuery) {
+func (r *RecordFieldResolver) updateQueryWithDeduplicateConstraint(query *dbx.SelectQuery, joinAliases []string) {
+	/* SQLite:
 	query.Distinct(true)
 
 	// @todo Research better options for generic rows deduplication.
@@ -239,6 +246,170 @@ func (r *RecordFieldResolver) updateQueryWithDeduplicateConstraint(query *dbx.Se
 	// } else {
 	// 	query.Distinct(true)
 	// }
+	*/
+
+	// PostgreSQL:
+	// "SELECT DISTINCT base.*" can't be used because PostgreSQL requires the ORDER BY
+	// expressions to appear in the select list (eg. "sort=author.name", "sort=@random")
+	// and some column types don't have an equality operator (eg. json columns in views).
+	//
+	// Instead the rows are deduplicated by grouping them by the base collection id:
+	// - for tables the other base columns are functionally dependent on the "id" primary key
+	// - for views (no primary key) the base row is selected with any_value()
+	// - the ORDER BY expressions that are not functionally dependent on the
+	//   base "id" are aggregated (aka. the min/max value for ASC/DESC)
+	info := query.Info()
+
+	// custom grouping
+	if len(info.GroupBy) > 0 {
+		query.Distinct(true)
+		return
+	}
+
+	baseAlias := r.baseCollection.Name
+	if r.baseCollectionAlias != "" {
+		baseAlias = r.baseCollectionAlias
+	}
+
+	isView := r.baseCollection.IsView()
+
+	query.GroupBy(baseAlias + ".id")
+
+	if selectAll := selectAllType(info.Selects, baseAlias); selectAll != selectAllNone {
+		if isView {
+			query.Select("(any_value({{" + baseAlias + "}})).*")
+		} else if selectAll == selectAllJoined {
+			// exclude the joined tables columns
+			query.Select("{{" + baseAlias + "}}.*")
+		}
+	}
+
+	if len(info.OrderBy) > 0 {
+		orderBy := make([]string, 0, len(info.OrderBy))
+		for _, col := range info.OrderBy {
+			for _, term := range splitTopLevelCommas(col) {
+				orderBy = append(orderBy, groupedOrderByTerm(term, isView, joinAliases))
+			}
+		}
+		query.OrderBy(orderBy...)
+	}
+}
+
+const (
+	selectAllNone   = 0 // specific columns/expressions
+	selectAllBase   = 1 // "base.*"
+	selectAllJoined = 2 // "*" (or no explicit select), aka. including the joined tables columns
+)
+
+// selectAllType reports whether the select columns are all columns
+// of the base table (see the selectAll* constants).
+func selectAllType(selects []string, baseAlias string) int {
+	if len(selects) == 0 {
+		return selectAllJoined
+	}
+
+	if len(selects) != 1 {
+		return selectAllNone
+	}
+
+	switch identifierQuotesReplacer.Replace(strings.TrimSpace(selects[0])) {
+	case "*":
+		return selectAllJoined
+	case baseAlias + ".*":
+		return selectAllBase
+	default:
+		return selectAllNone
+	}
+}
+
+var identifierQuotesReplacer = strings.NewReplacer(`"`, "", "`", "", "[[", "", "]]", "", "{{", "", "}}", "")
+
+var orderByDirectionRegex = regexp.MustCompile(`(?i)\s+(ASC|DESC)$`)
+
+// groupedOrderByTerm returns the provided single ORDER BY term
+// in a form compatible with the "GROUP BY base.id" deduplication.
+func groupedOrderByTerm(term string, isView bool, joinAliases []string) string {
+	expr := strings.TrimSpace(term)
+	dir := "ASC"
+	if match := orderByDirectionRegex.FindStringSubmatch(expr); len(match) > 0 {
+		expr = strings.TrimSpace(expr[:len(expr)-len(match[0])])
+		dir = strings.ToUpper(match[1])
+	}
+
+	// non-column expression or functionally dependent on the base table primary key
+	if strings.EqualFold(expr, "RANDOM()") || (!isView && !referencesAnyAlias(expr, joinAliases)) {
+		return strings.TrimSpace(term)
+	}
+
+	// aggregate the value of the duplicated rows (NULLS LAST is to pick the min/max non-null value)
+	return fmt.Sprintf("(array_agg(%s ORDER BY %s %s NULLS LAST))[1] %s", expr, expr, dir, dir)
+}
+
+// referencesAnyAlias reports whether the SQL expression references
+// a column of any of the provided table aliases (eg. "[[alias.column]]").
+func referencesAnyAlias(expr string, aliases []string) bool {
+	for _, alias := range aliases {
+		if alias == "" {
+			continue
+		}
+
+		for offset := 0; offset < len(expr); {
+			idx := strings.Index(expr[offset:], alias)
+			if idx < 0 {
+				break
+			}
+
+			start := offset + idx
+			end := start + len(alias)
+			offset = end
+
+			if start > 0 && isIdentifierChar(expr[start-1]) {
+				continue
+			}
+
+			rest := expr[end:]
+			if strings.HasPrefix(rest, ".") || strings.HasPrefix(rest, `".`) || strings.HasPrefix(rest, "`.") {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func isIdentifierChar(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
+// splitTopLevelCommas splits the provided ORDER BY clause part
+// by its top-level commas (aka. not inside parenthesis or quotes).
+func splitTopLevelCommas(str string) []string {
+	var parts []string
+	var depth int
+	var quote byte
+	var start int
+
+	for i := range len(str) {
+		c := str[i]
+
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+		case c == ',' && depth == 0:
+			parts = append(parts, str[start:i])
+			start = i + 1
+		}
+	}
+
+	return append(parts, str[start:])
 }
 
 //nolint:unused
@@ -397,8 +568,27 @@ func (r *RecordFieldResolver) resolveStaticRequestField(path ...string) (*search
 		}, nil
 	}
 
+	/* SQLite:
 	return &search.ResolverResult{
 		Identifier: "{:" + placeholder + "}",
+		Params:     dbx.Params{placeholder: resultVal},
+	}, nil
+	*/
+	// PostgreSQL:
+	// Explicitly type the numeric and boolean params because otherwise PostgreSQL
+	// infers their type from the other operand and pgx silently truncates
+	// the value (eg. "@request.body.amount >= 0" with -0.5 is compared as int4 0)
+	// or fails to encode it (eg. a bool compared with an integer).
+	identifier := "{:" + placeholder + "}"
+	switch resultVal.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		identifier += "::numeric"
+	case bool:
+		identifier += "::boolean"
+	}
+
+	return &search.ResolverResult{
+		Identifier: identifier,
 		Params:     dbx.Params{placeholder: resultVal},
 	}, nil
 }
