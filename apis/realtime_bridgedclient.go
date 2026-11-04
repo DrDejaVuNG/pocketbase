@@ -1,11 +1,9 @@
 package apis
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
-	"strings"
+	"slices"
 	"sync"
+
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/subscriptions"
@@ -14,26 +12,38 @@ import (
 type IBridgedClient interface {
 	subscriptions.Client
 
+	// ClientSubscription returns a copy of the client's last known _realtimeClients row.
 	ClientSubscription() *ClientSubscription
 
-	// IsRemoteClient returns true if the client is connected to current pocketbase instance via WebSocket.
-	// It returns false if the client is connected to other pocketbase instances.
+	// IsRemoteClient returns false if the client is connected to the current pocketbase instance via SSE.
+	// It returns true if the client is connected to another pocketbase instance.
 	IsRemoteClient() bool
 
-	// BroadcastGoOffline notifies all other pocketbase instances that the client is offline.
+	// BroadcastGoOffline deletes the client row and notifies all other pocketbase instances
+	// that the client is offline (only the instance that owns the client connection does that).
 	BroadcastGoOffline()
 
-	// BroadcastChanges notifies all other pocketbase instances about the client's subscription changes.
-	// It also works as BroadcastGoOnline() when it is called for the first time.
+	// BroadcastChanges stores the client's subscriptions and auth state and
+	// notifies all other pocketbase instances about the change.
+	//
+	// The instance that owns the client connection creates the row if missing,
+	// the other instances only update an existing row.
 	BroadcastChanges()
 
-	// ReceiveChanges receives subscription changes from other pocketbase instances.
-	ReceiveChanges(newSubscription *ClientSubscription, authRecordJson string)
+	// BroadcastAuthChanges is similar to BroadcastChanges but stores only the client's auth state.
+	BroadcastAuthChanges()
+
+	// ReceiveChanges applies the subscription changes received from other pocketbase instances.
+	//
+	// authRecord is the auth record referenced by newSubscription loaded from the db (nil for guests).
+	ReceiveChanges(newSubscription *ClientSubscription, authRecord *core.Record)
 }
 
 // ClientSubscription is stored in the _realtimeClients table in PostgreSQL.
 // Every time a new client connects to the pocketbase server, a new row is created.
 // And other pocketbase servers are notified via Postgres's Listen/Notify feature.
+//
+// Note that only ids are stored: the other instances load the auth record from the db.
 type ClientSubscription struct {
 	ClientId           string   `db:"pk,clientId" json:"clientId"`
 	ChannelId          string   `db:"channelId" json:"channelId"`
@@ -41,17 +51,31 @@ type ClientSubscription struct {
 	AuthCollectionRef  string   `db:"authCollectionRef" json:"authCollectionRef"`
 	AuthRecordRef      string   `db:"authRecordRef" json:"authRecordRef"`
 	UpdatedByChannelId string   `db:"updatedByChannelId" json:"updatedByChannelId"`
+	IP                 string   `db:"ip" json:"ip"`
+
+	// Version increases with every write of the row (from a sequence shared by
+	// all rows) and is used to ignore rows older than the already applied state.
+	Version int64 `db:"version" json:"version"`
+}
+
+func (s *ClientSubscription) clone() *ClientSubscription {
+	c := *s
+	c.Subscriptions = append([]string{}, s.Subscriptions...) // never nil (NOT NULL column)
+	return &c
 }
 
 var _ subscriptions.Client = (*BridgedClient)(nil)
 var _ IBridgedClient = (*BridgedClient)(nil)
 
-// BridgedClient defines a remote subscription client.
+// BridgedClient defines a subscription client that is synchronized between the pocketbase instances.
 type BridgedClient struct {
 	subscriptions.Client
 	bridge       IRealtimeBridge
 	mu           sync.RWMutex
 	subscription *ClientSubscription
+
+	// syncMu serializes the row writes and the received changes of the client
+	syncMu sync.Mutex
 }
 
 // NewBridgedClient
@@ -64,17 +88,15 @@ func NewBridgedClient(bridge IRealtimeBridge, optionalSubscription ...*ClientSub
 	if len(optionalSubscription) > 0 && optionalSubscription[0] != nil {
 		// remote client (client is connected to other pocketbase instance)
 		client = subscriptions.NewDefaultClient(optionalSubscription[0].ClientId)
-		subscription = optionalSubscription[0]
+		subscription = optionalSubscription[0].clone()
+		subscription.Version = 0 // not applied yet (see ReceiveChanges)
 	} else {
 		// local client (client is connected to current pocketbase instance)
 		client = subscriptions.NewDefaultClient()
 		subscription = &ClientSubscription{
-			ClientId:           client.Id(),
-			ChannelId:          bridge.SelfChannelId(),
-			Subscriptions:      []string{},
-			AuthCollectionRef:  "",
-			AuthRecordRef:      "",
-			UpdatedByChannelId: "",
+			ClientId:      client.Id(),
+			ChannelId:     bridge.SelfChannelId(),
+			Subscriptions: []string{},
 		}
 	}
 
@@ -88,128 +110,213 @@ func NewBridgedClient(bridge IRealtimeBridge, optionalSubscription ...*ClientSub
 func (r *BridgedClient) BroadcastGoOffline() {
 	r.mu.RLock()
 	clientId := r.subscription.ClientId
+	channelId := r.subscription.ChannelId
 	r.mu.RUnlock()
+
+	selfChannelId := r.bridge.SelfChannelId()
+	if channelId != selfChannelId {
+		return // only the owner instance removes the client
+	}
 
 	// delete and notify
 	_, err := r.bridge.App().DB().NewQuery(`
 		WITH deleted AS (
 			DELETE FROM "_realtimeClients"
-			WHERE "clientId" = {:clientId}
-			RETURNING *
+			WHERE "clientId" = {:clientId} AND "channelId" = {:channelId}
+			RETURNING "clientId"
 		)
-		SELECT pg_notify('shared_bridge_channel', 'subscription_delete|' || deleted."clientId") FROM deleted;
+		SELECT pg_notify('shared_bridge_channel', json_build_object('type', 'client_delete', 'from', {:channelId}::text, 'clientId', "clientId")::text)
+		FROM deleted
 	`).Bind(dbx.Params{
-		"clientId": clientId,
+		"clientId":  clientId,
+		"channelId": channelId,
 	}).Execute()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error deleting subscription:", err)
-		return
+		r.bridge.App().Logger().Error("Realtime bridge: failed to delete the realtime client", "clientId", clientId, "error", err)
 	}
 }
 
-// BroadcastChanges notifies all other pocketbase instances about the client's subscription changes.
-// If it is called for the first time, it will act as `BroadcastGoOnline()`.
-// If the client has an auth record, it will send the auth record JSON to other pocketbase instances.
 func (r *BridgedClient) BroadcastChanges() {
-	if len(r.RawSubscriptions()) == 0 {
-		// treat no subscriptions as offline
-		r.BroadcastGoOffline()
-		return
+	if err := r.broadcast(false); err != nil {
+		r.bridge.App().Logger().Error("Realtime bridge: failed to store the realtime client", "clientId", r.Id(), "error", err)
 	}
+}
 
-	// 1. clientId should not be changed
-	// 2. channelId should not be changed
-	// 3. update subscriptions
-	r.subscription.Subscriptions = r.RawSubscriptions()
-	// 4. updatedByChannelId is set to the current channelId
-	r.subscription.UpdatedByChannelId = r.bridge.SelfChannelId()
+func (r *BridgedClient) BroadcastAuthChanges() {
+	if err := r.broadcast(true); err != nil {
+		r.bridge.App().Logger().Error("Realtime bridge: failed to store the realtime client auth", "clientId", r.Id(), "error", err)
+	}
+}
 
-	// 5. update auth collection and record refs
+// broadcast stores the client state in its _realtimeClients row and notifies
+// the other instances (with the client id only).
+//
+// The owner instance upserts the row while the other instances only update
+// the existing row so that a disconnected client is never resurrected.
+func (r *BridgedClient) broadcast(authOnly bool) error {
+	r.syncMu.Lock()
+	defer r.syncMu.Unlock()
+
+	selfChannelId := r.bridge.SelfChannelId()
+
+	var authCollectionRef, authRecordRef string
+	if authRecord, ok := r.Get(RealtimeClientAuthKey).(*core.Record); ok && authRecord != nil {
+		authCollectionRef = authRecord.Collection().Id
+		authRecordRef = authRecord.Id
+	}
+	subs := r.RawSubscriptions()
+	slices.Sort(subs)
+	ip, _ := r.Get(RealtimeClientIPKey).(string)
 
 	r.mu.Lock()
-	// 1. clientId should not be changed
-	// 2. channelId should not be changed
-	// 3. update subscriptions
-	r.subscription.Subscriptions = r.RawSubscriptions()
-
-	// 4. update authRecord
-	authSQL := ""
-	authParams := dbx.Params{}
-	if authRecord, ok := r.Get(RealtimeClientAuthKey).(*core.Record); ok && authRecord != nil {
-		r.subscription.AuthCollectionRef = authRecord.Collection().Id
-		r.subscription.AuthRecordRef = authRecord.Id
-		authSQL = fmt.Sprintf("SELECT * FROM {{%s}} WHERE [[id]] = {:authRecordId}", authRecord.Collection().Name)
-		authParams["authRecordId"] = authRecord.Id
-	} else {
-		r.subscription.AuthCollectionRef = ""
-		r.subscription.AuthRecordRef = ""
-		authSQL = "SELECT 1 AS x FROM (SELECT 1) AS noop WHERE 1=0" // empty rows.
+	r.subscription.AuthCollectionRef = authCollectionRef
+	r.subscription.AuthRecordRef = authRecordRef
+	if !authOnly {
+		r.subscription.Subscriptions = subs
 	}
-	params := dbx.Params{
-		"clientId":           r.subscription.ClientId,
-		"channelId":          r.subscription.ChannelId,
-		"subscriptions":      r.subscription.Subscriptions,
-		"authCollectionRef":  r.subscription.AuthCollectionRef,
-		"authRecordRef":      r.subscription.AuthRecordRef,
-		"updatedByChannelId": r.subscription.UpdatedByChannelId,
+	r.subscription.UpdatedByChannelId = selfChannelId
+	isOwner := r.subscription.ChannelId == selfChannelId
+	if isOwner {
+		r.subscription.IP = ip
 	}
+	s := r.subscription.clone()
 	r.mu.Unlock()
-	_, err := r.bridge.App().DB().NewQuery(fmt.Sprintf(`
-		WITH
-			updated AS (
-				INSERT INTO "_realtimeClients" (
-					"clientId", "channelId", "subscriptions", "authCollectionRef", "authRecordRef", "updatedByChannelId"
-				) VALUES (
-					{:clientId}, {:channelId}, {:subscriptions}, {:authCollectionRef}, {:authRecordRef}, {:updatedByChannelId}
-				) ON CONFLICT ("clientId") DO UPDATE
-				SET "subscriptions" = EXCLUDED."subscriptions",
-					"authCollectionRef" = EXCLUDED."authCollectionRef",
-					"authRecordRef" = EXCLUDED."authRecordRef",
-					"updatedByChannelId" = EXCLUDED."updatedByChannelId"
-				RETURNING *
-			),
-			auth AS (
-				%s
-			)
-		SELECT pg_notify(
-			'shared_bridge_channel', 
-			CONCAT_WS(
-				'|',
-				'subscription_upsert', 
-				(SELECT row_to_json(u) FROM updated u)::text, 
-				COALESCE((SELECT row_to_json(a) FROM auth a)::text, '')
-			)
-		);
-	`, authSQL)).Bind(authParams).Bind(params).Execute()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error updating subscription:", err)
-		return
+
+	params := dbx.Params{
+		"clientId":           s.ClientId,
+		"channelId":          s.ChannelId,
+		"subscriptions":      s.Subscriptions,
+		"authCollectionRef":  s.AuthCollectionRef,
+		"authRecordRef":      s.AuthRecordRef,
+		"updatedByChannelId": s.UpdatedByChannelId,
+		"ip":                 s.IP,
+		"selfChannelId":      selfChannelId,
 	}
-	// other sibling servers will be notified by Postgres Listen/Notify feature
+
+	setColumns := `
+		"authCollectionRef" = {:authCollectionRef},
+		"authRecordRef" = {:authRecordRef},
+		"updatedByChannelId" = {:updatedByChannelId}`
+	if !authOnly {
+		setColumns += `,
+		"subscriptions" = {:subscriptions}`
+	}
+	setColumns += `,
+		"version" = nextval('"_realtimeClients_version_seq"')`
+
+	var upsert string
+	if isOwner {
+		if r.IsDiscarded() {
+			return nil // disconnected
+		}
+		upsert = `
+			INSERT INTO "_realtimeClients" (
+				"clientId", "channelId", "subscriptions", "authCollectionRef", "authRecordRef", "updatedByChannelId", "ip", "version"
+			) VALUES (
+				{:clientId}, {:channelId}, {:subscriptions}, {:authCollectionRef}, {:authRecordRef}, {:updatedByChannelId}, {:ip}, nextval('"_realtimeClients_version_seq"')
+			) ON CONFLICT ("clientId") DO UPDATE
+			SET ` + setColumns + `
+			WHERE "_realtimeClients"."channelId" = {:channelId}
+			RETURNING "clientId", "version"`
+	} else {
+		upsert = `
+			UPDATE "_realtimeClients"
+			SET ` + setColumns + `
+			WHERE "clientId" = {:clientId} AND "channelId" = {:channelId}
+			RETURNING "clientId", "version"`
+	}
+
+	var notified int
+	var version int64
+	err := r.bridge.App().DB().NewQuery(`
+		WITH updated AS (`+upsert+`)
+		SELECT
+			count(pg_notify('shared_bridge_channel', json_build_object('type', 'client_upsert', 'from', {:selfChannelId}::text, 'clientId', "clientId")::text)),
+			COALESCE(max("version"), 0)
+		FROM updated
+	`).Bind(params).Row(&notified, &version)
+	if err != nil {
+		return err
+	}
+
+	if version > 0 {
+		r.mu.Lock()
+		r.subscription.Version = version
+		r.mu.Unlock()
+	}
+
+	if notified == 0 && !isOwner {
+		// the row is gone, aka. the client has disconnected from its instance
+		if c, err := r.bridge.App().SubscriptionsBroker().ClientById(s.ClientId); err == nil && c == subscriptions.Client(r) {
+			r.bridge.App().SubscriptionsBroker().Unregister(s.ClientId)
+		}
+	}
+
+	return nil
 }
 
-func (r *BridgedClient) ReceiveChanges(newSubscription *ClientSubscription, authRecordJson string) {
-	// 1. clientId should not be changed
-	// 2. channelId should not be changed
-	// 3. update subscriptions
-	r.Client.Unsubscribe() // clear previous subscriptions
-	r.Client.Subscribe(newSubscription.Subscriptions...)
-	// 4. update auth collection and record refs
-	if newSubscription.AuthRecordRef == "" || newSubscription.AuthCollectionRef == "" {
+func (r *BridgedClient) ReceiveChanges(newSubscription *ClientSubscription, authRecord *core.Record) {
+	r.syncMu.Lock()
+
+	r.mu.RLock()
+	remote := r.subscription.ChannelId != r.bridge.SelfChannelId()
+	stale := newSubscription.Version != 0 && newSubscription.Version <= r.subscription.Version
+	r.mu.RUnlock()
+
+	// the row was read before a newer change of this client was applied or written
+	if stale {
+		r.syncMu.Unlock()
+		return
+	}
+
+	r.replaceSubscriptions(newSubscription.Subscriptions)
+
+	revoked := false
+	if remote {
+		r.Client.Set(RealtimeClientIPKey, newSubscription.IP)
+	} else if authRecord != nil {
+		// the owner knows the tokenKey the client authenticated with:
+		// a different one means that the token was revoked (eg. password change)
+		prev, _ := r.Client.Get(RealtimeClientAuthKey).(*core.Record)
+		revoked = prev != nil && isSameAuth(prev, authRecord) && prev.TokenKey() != authRecord.TokenKey()
+	}
+
+	if authRecord == nil || revoked {
 		r.Client.Unset(RealtimeClientAuthKey)
 	} else {
-		authRecord, err := AuthRecordFromJson(r.bridge.App(), newSubscription.AuthCollectionRef, authRecordJson)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Error unmarshalling auth record JSON:", err)
-			return
-		}
 		r.Client.Set(RealtimeClientAuthKey, authRecord)
 	}
-	// 5. updatedByChannelId should not be changed
 
 	r.mu.Lock()
-	r.subscription = newSubscription
+	s := newSubscription.clone()
+	if !remote {
+		// the channel and the IP of a local client never change
+		s.ChannelId = r.subscription.ChannelId
+		s.IP = r.subscription.IP
+	}
+	r.subscription = s
 	r.mu.Unlock()
+
+	r.syncMu.Unlock()
+
+	if revoked {
+		r.BroadcastAuthChanges()
+	}
+}
+
+// replaceSubscriptions replaces the client subscriptions with subs
+// without a window where the common subscriptions are missing.
+func (r *BridgedClient) replaceSubscriptions(subs []string) {
+	var stale []string
+	for _, s := range r.Client.RawSubscriptions() {
+		if !slices.Contains(subs, s) {
+			stale = append(stale, s)
+		}
+	}
+	if len(stale) > 0 {
+		r.Client.Unsubscribe(stale...)
+	}
+	r.Client.Subscribe(subs...)
 }
 
 // Send sends the specified message to the client's channel (if not discarded).
@@ -220,10 +327,9 @@ func (r *BridgedClient) Send(m subscriptions.Message) {
 
 	r.mu.RLock()
 	channelId := r.subscription.ChannelId
-	remote := channelId != r.bridge.SelfChannelId()
 	r.mu.RUnlock()
 
-	if remote {
+	if channelId != r.bridge.SelfChannelId() {
 		// send to sibling servers
 		r.bridge.SendViaBridge(channelId, r.Id(), m)
 	} else {
@@ -241,41 +347,5 @@ func (r *BridgedClient) IsRemoteClient() bool {
 func (r *BridgedClient) ClientSubscription() *ClientSubscription {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.subscription
-}
-
-func AuthRecordFromJson(app core.App, authCollectionNameOrId string, authRecordJson string) (*core.Record, error) {
-	if authRecordJson == "" {
-		return nil, nil
-	}
-	collection, err := app.FindCachedCollectionByNameOrId(authCollectionNameOrId)
-	if err != nil {
-		return nil, fmt.Errorf("error finding collection by name or ID: %w", err)
-	}
-	authRecord := core.NewRecord(collection)
-
-	data := make(map[string]any)
-	_ = json.Unmarshal([]byte(authRecordJson), &data)
-	for _, field := range collection.Fields {
-		fieldName := field.GetName()
-		value, _ := field.PrepareValue(authRecord, data[fieldName])
-		authRecord.SetRaw(fieldName, value)
-	}
-	return authRecord, nil
-}
-
-func split2(s string, sep string) (string, string, bool) {
-	parts := strings.SplitN(s, sep, 2)
-	if len(parts) != 2 {
-		return "", "", false
-	}
-	return parts[0], parts[1], true
-}
-
-func split3(s string, sep string) (string, string, string, bool) {
-	parts := strings.SplitN(s, sep, 3)
-	if len(parts) != 3 {
-		return "", "", "", false
-	}
-	return parts[0], parts[1], parts[2], true
+	return r.subscription.clone()
 }
