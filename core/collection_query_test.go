@@ -180,6 +180,8 @@ func TestFindCachedCollectionByNameOrId(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// the cache misses ("" and "missing") fallback to the db
+			expectedTotalQueries = 2
 		} else {
 			app.Store().Reset(nil)
 			expectedTotalQueries = len(scenarios)
@@ -210,6 +212,39 @@ func TestFindCachedCollectionByNameOrId(t *testing.T) {
 	run(true)
 
 	run(false)
+}
+
+func TestFindCachedCollectionByNameOrIdCacheMiss(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	if err := app.ReloadCachedCollections(); err != nil {
+		t.Fatal(err)
+	}
+	staleCache, _ := app.Store().Get(core.StoreKeyCachedCollections).([]*core.Collection)
+
+	// eg. created by another instance whose change notification is not processed yet
+	collection := core.NewBaseCollection("cache_miss_test")
+	if err := app.Save(collection); err != nil {
+		t.Fatal(err)
+	}
+	app.Store().Set(core.StoreKeyCachedCollections, staleCache)
+
+	found, err := app.FindCachedCollectionByNameOrId("cache_miss_test")
+	if err != nil {
+		t.Fatalf("Expected the collection to be found, got %v", err)
+	}
+	if found.Id != collection.Id {
+		t.Fatalf("Expected collection %s, got %s", collection.Id, found.Id)
+	}
+
+	// the cache is reloaded
+	cached, _ := app.Store().Get(core.StoreKeyCachedCollections).([]*core.Collection)
+	if len(cached) != len(staleCache)+1 {
+		t.Fatalf("Expected the cache to be reloaded with %d collections, got %d", len(staleCache)+1, len(cached))
+	}
 }
 
 func TestFindCollectionReferences(t *testing.T) {
