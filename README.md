@@ -74,6 +74,11 @@ See: [pocketbase/pocketbase](https://github.com/pocketbase/pocketbase)
 | `PB_HTTPS_ADDR` | TCP address to listen for the HTTPS server | - |
 | `PB_PATH_PREFIX` | URL path prefix for the HTTP server (Useful when reuse same domain for diffrent sites behind nginx) | - |
 | `PB_ALLOWED_ORIGINS` | Comma separated list of allowed CORS origins | `*` (all origins) |
+| `PB_DATA_MAX_OPEN_CONNS` / `PB_DATA_MAX_IDLE_CONNS` | Data DB pool size per node (keep `nodes × (data + aux)` below PostgresSQL `max_connections` minus reserved; data ≥ 4 with the realtime bridge) | `20` / `5` |
+| `PB_AUX_MAX_OPEN_CONNS` / `PB_AUX_MAX_IDLE_CONNS` | Logs DB pool size per node | `4` / `2` |
+| `PB_TX_SERIALIZE` | Serialize top-level `RunInTransaction` calls across all nodes with an advisory lock (prevents lost updates, like SQLite's single writer). Set `false` only if your code locks rows itself. | `true` |
+| `PB_REALTIME_PING_SECONDS` | SSE keepalive interval for proxies with idle timeouts (`0` disables) | `30` |
+| `PB_HEALTH_LOG_SUCCESS` | Log successful `/api/health` requests | `false` |
 
 **Limitations**
 
@@ -81,6 +86,10 @@ See: [pocketbase/pocketbase](https://github.com/pocketbase/pocketbase)
   > You need to add a S3 storage account if you are deploying multiple instances and need the file upload feature.
 - The built-in SQLite Backup feature is not supported
   > PostgresSQL have many mature and stable backup solutions. Eg: `pg_dump`, `docker-pg-backup`, `postgres-backup-s3`.
+- Connect to PostgresSQL directly or through a pooler in session mode. Transaction-mode poolers (PgBouncer, RDS Proxy) break the realtime bridge (`LISTEN`) and the migration locks.
+- Rate limits, OTP guess limits and resend throttles are kept per node; with N nodes behind a load balancer the effective limit is N times the configured one.
+- Realtime bridge messages changed format on 2026-11-04; during a rolling upgrade from an older build, realtime events between old and new nodes are not delivered.
+- Multi-node production scenarios: see `examples/prodtest/README.md`.
 
 **Disclaimer**
 
