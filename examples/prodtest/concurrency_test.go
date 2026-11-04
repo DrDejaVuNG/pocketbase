@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // parallel runs fn n times concurrently, each call routed to node i%nodes.
@@ -171,14 +172,20 @@ func TestConcurrency(t *testing.T) {
 		var otp struct{ OtpId string }
 		r.decode(t, &otp)
 
-		r = mustCall(t, f.node(1), f.suToken, "GET",
-			"/api/collections/mail_outbox/records?filter="+urlq("otpId='"+otp.OtpId+"'"), nil, 200)
+		// the OTP mail is sent (and captured) in the background after the response
 		var mails struct {
 			Items []struct{ Password string } `json:"items"`
 		}
-		r.decode(t, &mails)
-		if len(mails.Items) != 1 {
-			t.Fatalf("expected 1 captured OTP mail, got %d", len(mails.Items))
+		if _, err := eventually(5*time.Second, 100*time.Millisecond, func() error {
+			r := mustCall(t, f.node(1), f.suToken, "GET",
+				"/api/collections/mail_outbox/records?filter="+urlq("otpId='"+otp.OtpId+"'"), nil, 200)
+			r.decode(t, &mails)
+			if len(mails.Items) != 1 {
+				return fmt.Errorf("expected 1 captured OTP mail, got %d", len(mails.Items))
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
 		}
 
 		tally := newTally()
