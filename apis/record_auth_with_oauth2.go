@@ -109,7 +109,7 @@ func recordAuthWithOAuth2(e *core.RequestEvent) error {
 
 	// Apple currently returns the user's name only as part of the first redirect data response
 	// so we try to assign the [apis.oauth2SubscriptionRedirect] forwarded name.
-	if form.Provider == auth.NameAppleWeb && authUser.Name == "" {
+	if auth.IsAppleWeb(form.Provider) && authUser.Name == "" {
 		nameKey := oauth2RedirectAppleNameStoreKeyPrefix + form.Code
 		name, ok := e.App.Store().Get(nameKey).(string)
 		if ok {
@@ -132,16 +132,13 @@ func recordAuthWithOAuth2(e *core.RequestEvent) error {
 		return e.InternalServerError("Failed OAuth2 relation check.", err)
 	}
 
-	switch {
-	case err == nil && externalAuthRel != nil:
-		authRecord, err = e.App.FindRecordById(form.collection, externalAuthRel.RecordRef())
-		if err != nil {
-			return err
-		}
-	case len(auth.EquivalentProviders[form.Provider]) > 0:
-		// Special case for multiple ClientId/ClientSecret pairs for a same platform
-		// See [auth.EquivalentProviders]
-		equivalentExternalAuthRel, err := e.App.FindFirstExternalAuthByExpr(dbx.HashExp{
+	// special case for multiple ClientId/ClientSecret pairs for a same platform (see [auth.EquivalentProviders])
+	//
+	// note: looked up before the switch (instead of a "fallthrough" case) so that
+	// the fallback auth record and email checks below still apply when missing
+	var equivalentExternalAuthRel *core.ExternalAuth
+	if externalAuthRel == nil && len(auth.EquivalentProviders[form.Provider]) > 0 {
+		equivalentExternalAuthRel, err = e.App.FindFirstExternalAuthByExpr(dbx.HashExp{
 			"collectionRef": form.collection.Id,
 			"provider":      list.ToInterfaceSlice(auth.EquivalentProviders[form.Provider]),
 			"providerId":    authUser.Id,
@@ -149,14 +146,19 @@ func recordAuthWithOAuth2(e *core.RequestEvent) error {
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return e.InternalServerError("Failed OAuth2 auth record check.", err)
 		}
-		if equivalentExternalAuthRel != nil {
-			authRecord, err = e.App.FindRecordById(form.collection, equivalentExternalAuthRel.RecordRef())
-			if err != nil {
-				return err
-			}
-			break // authRecord found
+	}
+
+	switch {
+	case externalAuthRel != nil:
+		authRecord, err = e.App.FindRecordById(form.collection, externalAuthRel.RecordRef())
+		if err != nil {
+			return err
 		}
-		fallthrough // authRecord not found, try other methods.
+	case equivalentExternalAuthRel != nil:
+		authRecord, err = e.App.FindRecordById(form.collection, equivalentExternalAuthRel.RecordRef())
+		if err != nil {
+			return err
+		}
 	case fallbackAuthRecord != nil && fallbackAuthRecord.Collection().Id == form.collection.Id:
 		// fallback to the logged auth record (if any)
 		authRecord = fallbackAuthRecord

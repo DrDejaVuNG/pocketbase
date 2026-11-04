@@ -20,19 +20,35 @@ func init() {
 	Providers[NameAppleWeb] = func() Provider {
 		return NewAppleProvider(NameAppleWeb)
 	}
-	EquivalentProviders[NameAppleNative] = []string{NameAppleWeb}
-	EquivalentProviders[NameAppleWeb] = []string{NameAppleNative}
 	// Keep old "apple" provider for backward compatibility
-	Providers["apple"] = func() Provider {
+	// (it behaves the same as the "apple_web" provider).
+	Providers[NameApple] = func() Provider {
 		return NewAppleProvider(NameAppleWeb)
 	}
+	EquivalentProviders[NameAppleNative] = []string{NameAppleWeb, NameApple}
+	EquivalentProviders[NameAppleWeb] = []string{NameAppleNative, NameApple}
+	EquivalentProviders[NameApple] = []string{NameAppleNative, NameAppleWeb}
 }
 
 var _ Provider = (*Apple)(nil)
 
-// NameAppleNative is the unique name of the Apple provider.
+// NameAppleNative is the unique name of the Apple provider for the native sign-in flow.
 const NameAppleNative string = "apple_native"
+
+// NameAppleWeb is the unique name of the Apple provider for the web sign-in flow.
 const NameAppleWeb string = "apple_web"
+
+// NameApple is the name of the legacy (pre apple_native/apple_web split) Apple provider.
+//
+// It is kept for backward compatibility with existing provider configs
+// and linked external auths and it behaves the same as [NameAppleWeb].
+const NameApple string = "apple"
+
+// IsAppleWeb reports whether the provider with the specified name
+// uses the Apple web sign-in flow ([NameAppleWeb] or the legacy [NameApple]).
+func IsAppleWeb(providerName string) bool {
+	return providerName == NameAppleWeb || providerName == NameApple
+}
 
 // Apple allows authentication via Apple OAuth2.
 //

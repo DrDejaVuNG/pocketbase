@@ -5,6 +5,7 @@ import (
 	"errors"
 	"image"
 	"image/png"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -2120,6 +2121,161 @@ func TestRecordAuthWithOAuth2(t *testing.T) {
 			ExpectedContent: []string{`"data":{}`},
 			ExpectedEvents:  map[string]int{"*": 0},
 		},
+	}
+
+	for _, scenario := range scenarios {
+		scenario.Test(t)
+	}
+}
+
+// note: not parallel because it temporary replaces the global Apple providers
+func TestRecordAuthWithOAuth2AppleProviders(t *testing.T) {
+	appleProviders := []string{auth.NameAppleNative, auth.NameAppleWeb, auth.NameApple}
+
+	originals := map[string]auth.ProviderFactoryFunc{}
+	for _, name := range appleProviders {
+		originals[name] = auth.Providers[name]
+	}
+	t.Cleanup(func() {
+		maps.Copy(auth.Providers, originals)
+	})
+
+	setup := func(t testing.TB, app *tests.TestApp, oauth2User auth.AuthUser) {
+		for _, name := range appleProviders {
+			auth.Providers[name] = func() auth.Provider {
+				u := oauth2User
+				return &oauth2MockProvider{
+					AuthUser: &u,
+					Token:    &oauth2.Token{AccessToken: "abc"},
+				}
+			}
+		}
+
+		users, err := app.FindCollectionByNameOrId("users")
+		if err != nil {
+			t.Fatal(err)
+		}
+		users.MFA.Enabled = false
+		users.OAuth2.Enabled = true
+		users.OAuth2.Providers = nil
+		for _, name := range appleProviders {
+			users.OAuth2.Providers = append(users.OAuth2.Providers, core.OAuth2ProviderConfig{
+				Name:         name,
+				ClientId:     "123",
+				ClientSecret: "456",
+			})
+		}
+		if err := app.Save(users); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	expectLinked := func(t testing.TB, app *tests.TestApp, email string, provider string) {
+		user, err := app.FindAuthRecordByEmail("users", email)
+		if err != nil {
+			t.Fatal(err)
+		}
+		externalAuths, err := app.FindAllExternalAuthsByRecord(user)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ea := range externalAuths {
+			if ea.Provider() == provider && ea.ProviderId() == "apple_sub" {
+				return
+			}
+		}
+		t.Fatalf("Expected %q external auth to be linked to %q", provider, email)
+	}
+
+	body := func(provider string) string {
+		return `{"provider":"` + provider + `","code":"test_code","redirectURL":"https://example.com"}`
+	}
+
+	var scenarios []tests.ApiScenario
+
+	for _, provider := range appleProviders {
+		scenarios = append(scenarios, tests.ApiScenario{
+			Name:   provider + " link by email (verified user)",
+			Method: http.MethodPost,
+			URL:    "/api/collections/users/auth-with-oauth2",
+			Body:   strings.NewReader(body(provider)),
+			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
+				setup(t, app, auth.AuthUser{Id: "apple_sub", Email: "test3@example.com"})
+			},
+			ExpectedStatus: 200,
+			ExpectedContent: []string{
+				`"isNew":false`,
+				`"email":"test3@example.com"`,
+				`"id":"bgs820n361vj1qd"`,
+			},
+			AfterTestFunc: func(t testing.TB, app *tests.TestApp, res *http.Response) {
+				expectLinked(t, app, "test3@example.com", provider)
+			},
+		})
+
+		// all Apple providers (incl. the legacy "apple") must be equivalent to each other
+		for _, equivalent := range appleProviders {
+			if equivalent == provider {
+				continue
+			}
+
+			scenarios = append(scenarios, tests.ApiScenario{
+				Name:   provider + " link by existing " + equivalent + " relation",
+				Method: http.MethodPost,
+				URL:    "/api/collections/users/auth-with-oauth2",
+				Body:   strings.NewReader(body(provider)),
+				BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
+					// different email to ensure that the user is resolved by the equivalent relation
+					setup(t, app, auth.AuthUser{Id: "apple_sub", Email: "test3@example.com"})
+
+					user, err := app.FindAuthRecordByEmail("users", "test2@example.com")
+					if err != nil {
+						t.Fatal(err)
+					}
+					ea := core.NewExternalAuth(app)
+					ea.SetCollectionRef(user.Collection().Id)
+					ea.SetRecordRef(user.Id)
+					ea.SetProvider(equivalent)
+					ea.SetProviderId("apple_sub")
+					if err := app.Save(ea); err != nil {
+						t.Fatal(err)
+					}
+				},
+				ExpectedStatus: 200,
+				ExpectedContent: []string{
+					`"isNew":false`,
+					`"email":"test2@example.com"`,
+					`"id":"oap640cot4yru2s"`,
+				},
+				AfterTestFunc: func(t testing.TB, app *tests.TestApp, res *http.Response) {
+					expectLinked(t, app, "test2@example.com", provider)
+					expectLinked(t, app, "test2@example.com", equivalent)
+				},
+			})
+		}
+	}
+
+	for _, provider := range []string{auth.NameAppleWeb, auth.NameApple} {
+		scenarios = append(scenarios, tests.ApiScenario{
+			Name:   provider + " store name",
+			Method: http.MethodPost,
+			URL:    "/api/collections/users/auth-with-oauth2",
+			Body:   strings.NewReader(body(provider)),
+			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
+				setup(t, app, auth.AuthUser{Id: "apple_sub"})
+				app.Store().Set("@redirect_name_test_code", "test_store_name")
+			},
+			ExpectedStatus: 200,
+			ExpectedContent: []string{
+				`"isNew":true`,
+				`"name":"test_store_name"`,
+			},
+			AfterTestFunc: func(t testing.TB, app *tests.TestApp, res *http.Response) {
+				if app.Store().Has("@redirect_name_test_code") {
+					t.Fatal("Expected @redirect_name_test_code store key to be removed")
+				}
+			},
+		})
 	}
 
 	for _, scenario := range scenarios {
