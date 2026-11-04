@@ -242,7 +242,11 @@ func DefaultFieldNameValidationRule(value any) error {
 
 	rules := []validation.Rule{
 		validation.Required,
+		/* SQLite:
 		validation.Length(1, 100),
+		*/
+		// PostgreSQL: longer identifiers are silently truncated
+		validation.Length(1, maxIdentifierLength),
 		validation.Match(fieldNameRegex),
 		validation.NotIn(excludeNames...),
 		validation.By(checkForVia),

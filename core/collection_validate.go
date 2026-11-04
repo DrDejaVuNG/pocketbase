@@ -109,7 +109,11 @@ func (validator *collectionValidator) run() error {
 		validation.Field(
 			&validator.new.Name,
 			validation.Required,
+			/* SQLite:
 			validation.Length(1, 255),
+			*/
+			// PostgreSQL: longer identifiers are silently truncated
+			validation.Length(1, maxIdentifierLength),
 			validation.By(checkForVia),
 			validation.Match(collectionNameRegex),
 			validation.By(validator.ensureNoSystemNameChange),
@@ -547,6 +551,16 @@ func (cv *collectionValidator) checkIndexes(value any) error {
 					"validation_invalid_index_expression",
 					"Invalid CREATE INDEX expression.",
 				),
+			}
+		}
+
+		// PostgreSQL: longer identifiers are silently truncated
+		if len(parsed.IndexName) > maxIdentifierLength {
+			return validation.Errors{
+				strconv.Itoa(i): validation.NewError(
+					"validation_index_name_too_long",
+					"The index name must be at most {{.max}} bytes.",
+				).SetParams(map[string]any{"max": maxIdentifierLength}),
 			}
 		}
 

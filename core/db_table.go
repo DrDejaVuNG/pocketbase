@@ -208,6 +208,13 @@ func (app *BaseApp) hasTable(db dbx.Builder, tableName string) bool {
 }
 
 // PostgreSQL:
+// maxIdentifierLength is the max PostgreSQL identifier length in bytes (NAMEDATALEN-1).
+//
+// Longer table, column and index names are silently truncated by PostgreSQL,
+// which breaks the name based lookups of the records tables and columns.
+const maxIdentifierLength = 63
+
+// PostgreSQL:
 // hasExactTable checks if a table (or view) with the exact provided name exists (case sensitive).
 //
 // Unlike SQLite, quoted PostgreSQL identifiers are case-sensitive, so the

@@ -144,7 +144,11 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 			"invalid length",
 			func() core.Field {
 				f := core.Fields[fieldType]()
+				/* SQLite:
 				f.SetName(strings.Repeat("a", 101))
+				*/
+				// PostgreSQL:
+				f.SetName(strings.Repeat("a", 64))
 				return f
 			},
 			true,
@@ -153,7 +157,11 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 			"valid length",
 			func() core.Field {
 				f := core.Fields[fieldType]()
+				/* SQLite:
 				f.SetName(strings.Repeat("a", 100))
+				*/
+				// PostgreSQL:
+				f.SetName(strings.Repeat("a", 63))
 				return f
 			},
 			false,

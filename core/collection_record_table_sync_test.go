@@ -9,6 +9,7 @@ import (
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tests"
+	"github.com/pocketbase/pocketbase/tools/dbutils"
 	"github.com/pocketbase/pocketbase/tools/list"
 	"github.com/pocketbase/pocketbase/tools/types"
 )
@@ -174,6 +175,71 @@ func TestSyncRecordTableSchemaCaseOnlyRename(t *testing.T) {
 				t.Fatalf("Failed to add a new field: %v", err)
 			}
 		})
+	}
+}
+
+// PostgreSQL: identifiers longer than 63 bytes are silently truncated.
+func TestSyncRecordTableSchemaMaxLengthIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	longName := strings.Repeat("c", 63)
+	longField := strings.Repeat("f", 63)
+
+	// auth collection with max length name (the default auth index names are derived from it)
+	authCol := core.NewAuthCollection(longName)
+	if err := app.Save(authCol); err != nil {
+		t.Fatalf("Failed to create collection: %v", err)
+	}
+
+	record := core.NewRecord(authCol)
+	record.SetEmail("long@example.com")
+	record.SetPassword("1234567890")
+	if err := app.Save(record); err != nil {
+		t.Fatalf("Failed to create record: %v", err)
+	}
+
+	// add a max length field to the existing collection
+	authCol.Fields.Add(&core.TextField{Name: longField})
+	if err := app.Save(authCol); err != nil {
+		t.Fatalf("Failed to add a new field: %v", err)
+	}
+
+	record, err := app.FindRecordById(longName, record.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Set(longField, "secret-value")
+	if err := app.Save(record); err != nil {
+		t.Fatal(err)
+	}
+
+	// rename an existing field to a max length name
+	renamed := strings.Repeat("r", 63)
+	authCol.Fields.GetByName(longField).SetName(renamed)
+	if err := app.Save(authCol); err != nil {
+		t.Fatalf("Failed to rename the field: %v", err)
+	}
+
+	record, err = app.FindRecordById(longName, record.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := record.GetString(renamed); v != "secret-value" {
+		t.Fatalf("Expected %q, got %q", "secret-value", v)
+	}
+
+	indexes, err := app.TableIndexes(longName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, idx := range authCol.Indexes {
+		name := dbutils.ParseIndex(idx).IndexName
+		if _, ok := indexes[name]; !ok {
+			t.Fatalf("Missing index %q in %v", name, indexes)
+		}
 	}
 }
 

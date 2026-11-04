@@ -106,7 +106,12 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 			// This way we are always doing 1 more rename operation but it provides better less ambiguous experience.
 
 			if oldField == nil {
+				/* SQLite:
 				tempName := field.GetName() + security.PseudorandomString(5)
+				*/
+				// PostgreSQL: don't derive from the field name because identifiers
+				// longer than 63 bytes are truncated (back to the actual name)
+				tempName := tempColumnName()
 				toRename[tempName] = field.GetName()
 
 				// add
@@ -115,7 +120,11 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 					return fmt.Errorf("failed to add column %s - %w", field.GetName(), err)
 				}
 			} else if oldField.GetName() != field.GetName() {
+				/* SQLite:
 				tempName := field.GetName() + security.PseudorandomString(5)
+				*/
+				// PostgreSQL: see the note above
+				tempName := tempColumnName()
 				toRename[tempName] = field.GetName()
 
 				// rename
@@ -159,6 +168,13 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 	// PostgreSQL: automatically handled by the database
 
 	return nil
+}
+
+// PostgreSQL:
+// tempColumnName returns a random temporary column name that doesn't depend on the
+// field name (identifiers longer than 63 bytes are truncated by PostgreSQL).
+func tempColumnName() string {
+	return "_pb_tmp_" + security.PseudorandomString(10)
 }
 
 func normalizeSingleVsMultipleFieldChanges(app App, newCollection *Collection, oldCollection *Collection) error {
@@ -213,7 +229,11 @@ func normalizeSingleVsMultipleFieldChanges(app App, newCollection *Collection, o
 			}
 
 			originalName := newField.GetName()
+			/* SQLite:
 			oldTempName := "_" + newField.GetName() + security.PseudorandomString(5)
+			*/
+			// PostgreSQL: see tempColumnName
+			oldTempName := tempColumnName()
 
 			// rename temporary the original column to something else to allow inserting a new one in its place
 			_, err = txApp.DB().RenameColumn(newCollection.Name, originalName, oldTempName).Execute()

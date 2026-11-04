@@ -1173,8 +1173,14 @@ func (c *Collection) fieldIndexName(field string) string {
 		name += security.PseudorandomStringWithAlphabet(10, DefaultIdAlphabet)
 	}
 
+	/* SQLite:
 	if len(name) > 64 {
 		return name[:64]
+	}
+	*/
+	// PostgreSQL:
+	if len(name) > maxIdentifierLength {
+		return name[:maxIdentifierLength]
 	}
 
 	return name
