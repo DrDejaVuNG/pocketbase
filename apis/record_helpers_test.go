@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -758,6 +759,94 @@ func TestRecordAuthResponseMFACheck(t *testing.T) {
 			t.Fatalf("Expected only 1 user2 mfa, got %d", total)
 		}
 	})
+}
+
+func TestRecordAuthResponseMFAConcurrentSingleUse(t *testing.T) {
+	t.Parallel()
+
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Cleanup()
+
+	user, err := app.FindAuthRecordByEmail("users", "test@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	user.Collection().MFA.Enabled = true
+	user.Collection().MFA.Duration = 100
+	user.Collection().MFA.Rule = ""
+	if err := app.Save(user.Collection()); err != nil {
+		t.Fatal(err)
+	}
+
+	mfa := core.NewMFA(app)
+	mfa.SetCollectionRef(user.Collection().Id)
+	mfa.SetRecordRef(user.Id)
+	mfa.SetMethod("example1")
+	if err := app.Save(mfa); err != nil {
+		t.Fatal(err)
+	}
+
+	const total = 4
+
+	// hold the MFA deletes until all requests have found and validated the same MFA
+	// (with a timeout because a correctly locked MFA allows only a single delete at a time)
+	var mu sync.Mutex
+	var arrived int
+	allArrived := make(chan struct{})
+	app.OnRecordDelete(core.CollectionNameMFAs).BindFunc(func(e *core.RecordEvent) error {
+		mu.Lock()
+		arrived++
+		if arrived == total {
+			close(allArrived)
+		}
+		mu.Unlock()
+
+		select {
+		case <-allArrived:
+		case <-time.After(2 * time.Second):
+		}
+
+		return e.Next()
+	})
+
+	errs := make([]error, total)
+	var wg sync.WaitGroup
+	for i := range total {
+		wg.Go(func() {
+			authRecord, err := app.FindRecordById(user.Collection(), user.Id)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+
+			event := new(core.RequestEvent)
+			event.App = app
+			event.Request = httptest.NewRequest(http.MethodGet, "/?mfaId="+mfa.Id, nil)
+			event.Response = httptest.NewRecorder()
+
+			errs[i] = apis.RecordAuthResponse(event, authRecord, "example2", nil)
+		})
+	}
+	wg.Wait()
+
+	var succeeded int
+	for _, err := range errs {
+		if err == nil {
+			succeeded++
+		}
+	}
+
+	if succeeded != 1 {
+		t.Fatalf("Expected exactly 1 successful MFA auth, got %d (%v)", succeeded, errs)
+	}
+
+	if _, err := app.FindMFAById(mfa.Id); err == nil {
+		t.Fatal("Expected the MFA record to be deleted")
+	}
 }
 
 func TestRecordAuthResponseSuperuserIPsWhitelistCheck(t *testing.T) {

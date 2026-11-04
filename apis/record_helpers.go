@@ -250,9 +250,46 @@ func checkMFA(e *core.RequestEvent, authRecord *core.Record, currentAuthMethod s
 		return "", e.BadRequestError("A different authentication method is required.", nil)
 	}
 
+	/* SQLite:
 	deleteMFA()
 
 	return "", nil
+	*/
+	// PostgreSQL: atomically consume (delete) the MFA record so that concurrent
+	// requests with the same mfaId can't complete the MFA more than once
+	if err := consumeSingleUseModel(e.App, mfa); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", e.BadRequestError("Invalid or expired MFA session.", errors.New("the MFA session was already used"))
+		}
+		return "", e.InternalServerError("Failed to delete used MFA record.", err)
+	}
+
+	return "", nil
+}
+
+// PostgreSQL: consumeSingleUseModel deletes the specified single-use
+// auth model (OTP, MFA) and returns [sql.ErrNoRows] if it was already
+// consumed (deleted) by another, possibly concurrent, request.
+//
+// The row is locked with SELECT ... FOR UPDATE inside the delete transaction
+// because under READ COMMITTED a plain DELETE of a row that was concurrently
+// deleted still succeeds (with 0 affected rows) and the model delete doesn't
+// report the affected rows count.
+func consumeSingleUseModel(app core.App, model core.Model) error {
+	return app.RunInTransaction(func(txApp core.App) error {
+		var id string
+
+		err := txApp.DB().Select("id").
+			From(model.TableName()).
+			Where(dbx.HashExp{"id": model.LastSavedPK()}).
+			PostFragment("FOR UPDATE").
+			Row(&id)
+		if err != nil {
+			return err
+		}
+
+		return txApp.Delete(model)
+	})
 }
 
 // EnrichRecord parses the request context and enrich the provided record:

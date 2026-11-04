@@ -2,9 +2,13 @@ package apis_test
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tests"
 	"github.com/pocketbase/pocketbase/tools/types"
@@ -640,5 +644,104 @@ func TestRecordAuthWithOTPManualRateLimiterCheck(t *testing.T) {
 				storeCache = app.Store().GetAll()
 			},
 		}).Test(t)
+	}
+}
+
+func TestRecordAuthWithOTPConcurrentSingleUse(t *testing.T) {
+	t.Parallel()
+
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Cleanup()
+
+	user, err := app.FindAuthRecordByEmail("users", "test@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	user.Collection().MFA.Enabled = false
+	if err := app.Save(user.Collection()); err != nil {
+		t.Fatal(err)
+	}
+
+	otp := core.NewOTP(app)
+	otp.Id = strings.Repeat("a", 15)
+	otp.SetCollectionRef(user.Collection().Id)
+	otp.SetRecordRef(user.Id)
+	otp.SetPassword("123456")
+	if err := app.Save(otp); err != nil {
+		t.Fatal(err)
+	}
+
+	// (must be less than the @pb_otp_ rate limit)
+	const total = 4
+
+	// hold all requests after the OTP validation and before the OTP consumption
+	// until all of them have validated the same OTP
+	var mu sync.Mutex
+	var arrived int
+	allArrived := make(chan struct{})
+	app.OnRecordAuthWithOTPRequest().BindFunc(func(e *core.RecordAuthWithOTPRequestEvent) error {
+		mu.Lock()
+		arrived++
+		if arrived == total {
+			close(allArrived)
+		}
+		mu.Unlock()
+
+		select {
+		case <-allArrived:
+		case <-time.After(10 * time.Second):
+			t.Error("Timeout waiting for all concurrent OTP requests")
+		}
+
+		return e.Next()
+	})
+
+	router, err := apis.NewRouter(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux, err := router.BuildMux()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	statuses := make([]int, total)
+	var wg sync.WaitGroup
+	for i := range total {
+		wg.Go(func() {
+			req := httptest.NewRequest(http.MethodPost, "/api/collections/users/auth-with-otp", strings.NewReader(
+				`{"otpId":"`+otp.Id+`","password":"123456"}`,
+			))
+			req.Header.Set("content-type", "application/json")
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			statuses[i] = rec.Code
+		})
+	}
+	wg.Wait()
+
+	var succeeded int
+	for _, status := range statuses {
+		switch status {
+		case http.StatusOK:
+			succeeded++
+		case http.StatusBadRequest:
+		default:
+			t.Errorf("Unexpected response status %d", status)
+		}
+	}
+
+	if succeeded != 1 {
+		t.Fatalf("Expected exactly 1 successful OTP auth, got %d (%v)", succeeded, statuses)
+	}
+
+	if _, err := app.FindOTPById(otp.Id); err == nil {
+		t.Fatal("Expected the OTP to be deleted")
 	}
 }

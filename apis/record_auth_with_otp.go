@@ -1,6 +1,7 @@
 package apis
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -68,11 +69,23 @@ func recordAuthWithOTP(e *core.RequestEvent) error {
 		otpId := e.OTP.Id
 		otpSentTo := e.OTP.SentTo()
 
+		/* SQLite:
 		// eagerly delete the OTP to avoid unnecessary double delete model hook calls
 		// triggered by the password change below
 		err := e.App.Delete(e.OTP)
 		if err != nil {
 			e.App.Logger().Error("Failed to delete used OTP", "error", err, "otpId", e.OTP.Id)
+		}
+		*/
+		// PostgreSQL: eagerly and atomically consume (delete) the OTP so that concurrent
+		// requests with the same OTP can't authenticate more than once
+		// (this also avoids unnecessary double delete model hook calls triggered by the password change below)
+		err := consumeSingleUseModel(e.App, e.OTP)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return e.BadRequestError("Invalid or expired OTP", errors.New("the OTP was already used"))
+			}
+			return e.InternalServerError("Failed to delete used OTP.", err)
 		}
 
 		// update the user email verified state in case the OTP originate from an email address matching the current record one
