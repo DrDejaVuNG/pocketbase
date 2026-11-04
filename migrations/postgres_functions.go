@@ -15,20 +15,26 @@ const (
 	advisoryLockKeyAux  = 723390691
 )
 
+// createSQLiteEquivalentFunctions installs (or replaces) the SQLite
+// equivalent functions and collation used by PocketBase.
+//
+// It is idempotent and could be executed multiple times
+// (e.g. by a migration to deliver changed function definitions).
 func createSQLiteEquivalentFunctions(db dbx.Builder, advisoryLockKey int64) error {
-	//PostgreSQL:
-	// 1. Check existance
+	/* PostgreSQL (removed):
+	// the probe matched any uuid_generate_v7 function in any schema
+	// (e.g. from the pg_uuidv7 extension) and skipped the installation
+	// entirely; it also prevented delivering fixed definitions
 	sql := `SELECT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'uuid_generate_v7');`
 	var exists bool
 	if err := db.NewQuery(sql).Row(&exists); err != nil {
 		return err
 	} else if exists {
-		// The function already exists, no need to create it again
 		return nil
 	}
+	*/
 
-	// Postgres:
-	// 2. Create function
+	// PostgreSQL: all statements are CREATE ... IF NOT EXISTS / CREATE OR REPLACE
 	funcDef := `
 	-- Serialize concurrent bootstraps against the same database.
 	-- CREATE EXTENSION/COLLATION/FUNCTION can deadlock on catalog locks
@@ -58,10 +64,12 @@ func createSQLiteEquivalentFunctions(db dbx.Builder, advisoryLockKey int64) erro
 	$$;
 
 	-- Alias [randomblob] to gen_random_bytes(...)
+	-- (VOLATILE: an IMMUTABLE function is evaluated once per statement, so every
+	-- row of a multi-row INSERT would get the same default id)
 	CREATE OR REPLACE FUNCTION randomblob(length integer)
 	RETURNS bytea
 	LANGUAGE SQL
-	IMMUTABLE
+	VOLATILE
 	AS $$
 	SELECT gen_random_bytes(length)
 	$$;
