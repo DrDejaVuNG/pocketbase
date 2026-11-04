@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tests"
 )
@@ -24,6 +25,168 @@ func TestTextFieldColumnType(t *testing.T) {
 
 	if v := f.ColumnType(app); v != expected {
 		t.Fatalf("Expected\n%q\ngot\n%q", expected, v)
+	}
+}
+
+// PostgreSQL: the <uuidv7> ids must be stored as TEXT because the relation
+// fields store the referenced ids as TEXT.
+func TestTextFieldUUIDv7PrimaryKey(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	pkField := &core.TextField{PrimaryKey: true, Pattern: "<uuidv7>"}
+	expectedColumnType := "TEXT PRIMARY KEY DEFAULT (uuid_generate_v7()::text) NOT NULL"
+	if v := pkField.ColumnType(app); v != expectedColumnType {
+		t.Fatalf("Expected column type\n%q\ngot\n%q", expectedColumnType, v)
+	}
+
+	uuidCol := core.NewBaseCollection("rv_uuid")
+	idField := uuidCol.Fields.GetByName("id").(*core.TextField)
+	idField.Pattern = "<uuidv7>"
+	idField.AutogeneratePattern = "<uuidv7>"
+	idField.Min = 36
+	idField.Max = 36
+	uuidCol.Fields.Add(&core.TextField{Name: "name"})
+	if err := app.Save(uuidCol); err != nil {
+		t.Fatal(err)
+	}
+
+	refCol := core.NewBaseCollection("rv_uuid_ref")
+	refCol.Fields.Add(
+		&core.TextField{Name: "label"},
+		&core.RelationField{Name: "u", CollectionId: uuidCol.Id, MaxSelect: 1},
+	)
+	if err := app.Save(refCol); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("id validation", func(t *testing.T) {
+		scenarios := []struct {
+			id          string
+			expectError bool
+		}{
+			{"0190a6a8-7f2d-7c3a-9b1e-3f6c2a1b4d5e", false},
+			{"0190A6A8-7F2D-7C3A-9B1E-3F6C2A1B4D5E", true},   // uppercase
+			{"{0190a6a8-7f2d-7c3a-9b1e-3f6c2a1b4d5e}", true}, // braces
+			{"0190a6a87f2d7c3a9b1e3f6c2a1b4d5e", true},       // no hyphens
+			{"0190a6a8-7f2d-4c3a-9b1e-3f6c2a1b4d5e", true},   // v4
+			{"abc", true},
+		}
+
+		for _, s := range scenarios {
+			record := core.NewRecord(uuidCol)
+			record.Id = s.id
+			err := app.Validate(record)
+			if hasErr := err != nil; hasErr != s.expectError {
+				t.Fatalf("[%s] Expected hasErr %v, got %v (%v)", s.id, s.expectError, hasErr, err)
+			}
+		}
+	})
+
+	first := core.NewRecord(uuidCol)
+	first.Set("name", "first")
+	if err := app.Save(first); err != nil {
+		t.Fatal(err)
+	}
+
+	ref := core.NewRecord(refCol)
+	ref.Set("label", "ref1")
+	ref.Set("u", first.Id)
+	if err := app.Save(ref); err != nil {
+		t.Fatal(err)
+	}
+
+	assertRelationFilters(t, app, first.Id, ref.Id)
+
+	t.Run("legacy UUID column conversion", func(t *testing.T) {
+		view := core.NewViewCollection("rv_uuid_view")
+		view.ViewQuery = "select id, name from rv_uuid"
+		if err := app.Save(view); err != nil {
+			t.Fatal(err)
+		}
+
+		// simulate a table created by an older version
+		for _, q := range []string{
+			`DROP VIEW "rv_uuid_view"`,
+			`ALTER TABLE "rv_uuid" ALTER COLUMN "id" DROP DEFAULT, ALTER COLUMN "id" TYPE UUID USING "id"::uuid, ALTER COLUMN "id" SET DEFAULT uuid_generate_v7()`,
+			`CREATE VIEW "rv_uuid_view" AS select id, name from rv_uuid`,
+		} {
+			if _, err := app.DB().NewQuery(q).Execute(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if dataType := idColumnType(t, app, "rv_uuid"); dataType != "uuid" {
+			t.Fatalf("Expected uuid id column before the conversion, got %q", dataType)
+		}
+
+		if err := app.SyncRecordTableSchema(uuidCol, uuidCol); err != nil {
+			t.Fatal(err)
+		}
+
+		if dataType := idColumnType(t, app, "rv_uuid"); dataType != "text" {
+			t.Fatalf("Expected text id column after the conversion, got %q", dataType)
+		}
+
+		if _, err := app.FindRecordById("rv_uuid_view", first.Id); err != nil {
+			t.Fatalf("Expected the dependent view to be restored: %v", err)
+		}
+
+		assertRelationFilters(t, app, first.Id, ref.Id)
+
+		// the default must still produce uuid ids
+		var defaultId string
+		err := app.DB().NewQuery(`INSERT INTO "rv_uuid" ("name") VALUES ('raw') RETURNING "id"`).Row(&defaultId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(defaultId) != 36 {
+			t.Fatalf("Expected uuid default id, got %q", defaultId)
+		}
+	})
+}
+
+func idColumnType(t *testing.T, app core.App, table string) string {
+	t.Helper()
+
+	var dataType string
+	err := app.DB().NewQuery(`
+		SELECT data_type FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = {:table} AND column_name = 'id'
+	`).Bind(dbx.Params{"table": table}).Row(&dataType)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return dataType
+}
+
+func assertRelationFilters(t *testing.T, app core.App, uuidId string, refId string) {
+	t.Helper()
+
+	refs, err := app.FindRecordsByFilter("rv_uuid_ref", "u.name = 'first'", "", 0, 0)
+	if err != nil {
+		t.Fatalf("Relation filter failed: %v", err)
+	}
+	if len(refs) != 1 || refs[0].Id != refId {
+		t.Fatalf("Expected 1 ref record, got %v", refs)
+	}
+
+	uuids, err := app.FindRecordsByFilter("rv_uuid", "rv_uuid_ref_via_u.label ?= 'ref1'", "", 0, 0)
+	if err != nil {
+		t.Fatalf("Back-relation filter failed: %v", err)
+	}
+	if len(uuids) != 1 || uuids[0].Id != uuidId {
+		t.Fatalf("Expected 1 uuid record, got %v", uuids)
+	}
+
+	none, err := app.FindRecordsByFilter("rv_uuid", "id = 'abc'", "", 0, 0)
+	if err != nil {
+		t.Fatalf("Non-uuid id filter failed: %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("Expected no records, got %v", none)
 	}
 }
 

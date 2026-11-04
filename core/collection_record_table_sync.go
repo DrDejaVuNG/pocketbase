@@ -1,6 +1,8 @@
 package core
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -143,6 +145,11 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 			}
 		}
 
+		// PostgreSQL:
+		if err := normalizeLegacyUUIDPrimaryKey(txApp, newCollection); err != nil {
+			return err
+		}
+
 		if err := normalizeSingleVsMultipleFieldChanges(txApp, newCollection, oldCollection); err != nil {
 			return err
 		}
@@ -175,6 +182,71 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 // field name (identifiers longer than 63 bytes are truncated by PostgreSQL).
 func tempColumnName() string {
 	return "_pb_tmp_" + security.PseudorandomString(10)
+}
+
+// PostgreSQL:
+// normalizeLegacyUUIDPrimaryKey converts the UUID typed primary key column
+// (created by older versions for the <uuidv7> id pattern) to TEXT because
+// the relation fields store the referenced ids as TEXT and the join
+// expressions compare them directly (uuid = text doesn't exist).
+func normalizeLegacyUUIDPrimaryKey(txApp App, collection *Collection) error {
+	idField, ok := collection.Fields.GetByName(FieldNameId).(*TextField)
+	if !ok || idField == nil {
+		return nil
+	}
+
+	var dataType string
+	err := txApp.DB().NewQuery(`
+		SELECT data_type
+		FROM information_schema.columns
+		WHERE table_schema = current_schema()
+		  AND table_name = {:tableName}
+		  AND column_name = {:columnName}
+		LIMIT 1
+	`).Bind(dbx.Params{"tableName": collection.Name, "columnName": FieldNameId}).Row(&dataType)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+
+	if dataType != "uuid" {
+		return nil // already TEXT
+	}
+
+	// temporary drop all views because a column used by a view can't change its type
+	views, err := findAllViewsInDependencyOrder(txApp)
+	if err != nil {
+		return err
+	}
+	for i := len(views) - 1; i >= 0; i-- {
+		if err := txApp.DeleteView(views[i].Name); err != nil {
+			return err
+		}
+	}
+
+	_, err = txApp.DB().NewQuery(fmt.Sprintf(
+		"ALTER TABLE {{%s}} ALTER COLUMN [[%s]] DROP DEFAULT, ALTER COLUMN [[%s]] TYPE TEXT USING [[%s]]::text, ALTER COLUMN [[%s]] SET DEFAULT %s",
+		collection.Name,
+		FieldNameId,
+		FieldNameId,
+		FieldNameId,
+		FieldNameId,
+		idField.primaryKeyDefault(),
+	)).Execute()
+	if err != nil {
+		return fmt.Errorf("failed to convert the UUID primary key of %s to TEXT: %w", collection.Name, err)
+	}
+
+	// restore views
+	for _, view := range views {
+		if _, err := txApp.DB().NewQuery(view.SQL).Execute(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func normalizeSingleVsMultipleFieldChanges(app App, newCollection *Collection, oldCollection *Collection) error {
