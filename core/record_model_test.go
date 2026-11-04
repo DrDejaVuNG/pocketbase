@@ -2165,6 +2165,54 @@ func TestRecordSaveIdFromOtherCollection(t *testing.T) {
 	}
 }
 
+// PostgreSQL: a failing auth cross-collection id lookup (eg. legacy UUID typed id column)
+// must not abort the outer transaction.
+func TestRecordSaveIdFromOtherCollectionLookupErrorInTransaction(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	legacy := core.NewAuthCollection("rv_legacy_uuid_auth")
+	if err := app.Save(legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	// simulate an auth collection created by an older version with UUID typed id column
+	_, err := app.DB().NewQuery(
+		"ALTER TABLE {{rv_legacy_uuid_auth}} ALTER COLUMN [[id]] DROP DEFAULT, ALTER COLUMN [[id]] TYPE UUID USING [[id]]::uuid",
+	).Execute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.ReloadCachedCollections(); err != nil {
+		t.Fatal(err)
+	}
+
+	txErr := app.RunInTransaction(func(txApp core.App) error {
+		users, err := txApp.FindCollectionByNameOrId("users")
+		if err != nil {
+			return err
+		}
+
+		record := core.NewRecord(users)
+		record.SetEmail("tx_lookup@example.com")
+		record.SetPassword("1234567890")
+		if err := txApp.Save(record); err != nil {
+			return fmt.Errorf("record save: %w", err)
+		}
+
+		if _, err := txApp.FindRecordById(users, record.Id); err != nil {
+			return fmt.Errorf("record find: %w", err)
+		}
+
+		return nil
+	})
+	if txErr != nil {
+		t.Fatal(txErr)
+	}
+}
+
 func TestRecordSaveIdUpdateNoValidation(t *testing.T) {
 	t.Parallel()
 

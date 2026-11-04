@@ -75,7 +75,15 @@ func (validator *collectionValidator) run() error {
 
 	// generate fields from the query (overwriting any explicit user defined fields)
 	if validator.new.IsView() {
+		/* SQLite:
 		validator.new.Fields, _ = validator.app.CreateViewFields(validator.new.ViewQuery)
+		*/
+		// PostgreSQL: an invalid query must not abort the outer transaction (if any)
+		_ = runBestEffort(validator.app, func(txApp App) error {
+			var err error
+			validator.new.Fields, err = txApp.CreateViewFields(validator.new.ViewQuery)
+			return err
+		})
 	}
 
 	// validate base fields
