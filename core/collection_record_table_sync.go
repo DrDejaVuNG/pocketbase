@@ -3,7 +3,6 @@ package core
 import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/pocketbase/dbx"
 	validation "github.com/pocketbase/ozzo-validation/v4"
@@ -25,7 +24,11 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 	txErr := app.RunInTransaction(func(txApp App) error {
 		// create
 		// -----------------------------------------------------------
+		/* SQLite:
 		if oldCollection == nil || !app.HasTable(oldCollection.Name) {
+		*/
+		// PostgreSQL: quoted identifiers are case-sensitive
+		if oldCollection == nil || !hasExactTable(txApp.DB(), oldCollection.Name) {
 			tableName := newCollection.Name
 
 			fields := newCollection.Fields
@@ -52,7 +55,11 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 		oldFields := oldCollection.Fields
 		newFields := newCollection.Fields
 
+		/* SQLite:
 		needTableRename := !strings.EqualFold(oldTableName, newTableName)
+		*/
+		// PostgreSQL: quoted identifiers are case-sensitive
+		needTableRename := oldTableName != newTableName
 
 		var needIndexesUpdate bool
 		if needTableRename ||

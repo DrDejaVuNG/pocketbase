@@ -3,6 +3,7 @@ package core_test
 import (
 	"bytes"
 	"encoding/json/v2"
+	"strings"
 	"testing"
 
 	"github.com/pocketbase/dbx"
@@ -110,6 +111,67 @@ func TestSyncRecordTableSchema(t *testing.T) {
 
 			if totalIndexes := len(indexes); totalIndexes != s.expectedIndexesCount {
 				t.Fatalf("Expected %d indexes, got %d:\n%v", s.expectedIndexesCount, totalIndexes, indexes)
+			}
+		})
+	}
+}
+
+// PostgreSQL: quoted identifiers are case-sensitive so a case-only
+// collection rename must also rename the records table.
+func TestSyncRecordTableSchemaCaseOnlyRename(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	baseCol := core.NewBaseCollection("rvcase")
+	baseCol.Fields.Add(&core.TextField{Name: "title"})
+	baseCol.AddIndex("idx_rvcase_title", false, "title", "")
+
+	authCol := core.NewAuthCollection("rvauthcase")
+
+	for _, col := range []*core.Collection{baseCol, authCol} {
+		t.Run(col.Name, func(t *testing.T) {
+			if err := app.Save(col); err != nil {
+				t.Fatal(err)
+			}
+
+			newName := strings.ToUpper(col.Name[:1]) + col.Name[1:]
+			col.Name = newName
+			if err := app.Save(col); err != nil {
+				t.Fatalf("Failed to rename the collection: %v", err)
+			}
+
+			var exactTables int
+			err := app.DB().NewQuery(`
+				SELECT count(*) FROM information_schema.tables
+				WHERE table_schema = current_schema() AND table_name = {:name}
+			`).Bind(dbx.Params{"name": newName}).Row(&exactTables)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if exactTables != 1 {
+				t.Fatalf("Expected table %q to exist", newName)
+			}
+
+			record := core.NewRecord(col)
+			if col.IsAuth() {
+				record.SetEmail("case@example.com")
+				record.SetPassword("1234567890")
+			} else {
+				record.Set("title", "test")
+			}
+			if err := app.Save(record); err != nil {
+				t.Fatalf("Failed to create record: %v", err)
+			}
+
+			if _, err := app.FindRecordById(newName, record.Id); err != nil {
+				t.Fatalf("Failed to find record: %v", err)
+			}
+
+			col.Fields.Add(&core.TextField{Name: "extra"})
+			if err := app.Save(col); err != nil {
+				t.Fatalf("Failed to add a new field: %v", err)
 			}
 		})
 	}
