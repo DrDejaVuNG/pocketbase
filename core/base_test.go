@@ -17,6 +17,7 @@ import (
 	"github.com/pocketbase/pocketbase/tests"
 	"github.com/pocketbase/pocketbase/tools/logger"
 	"github.com/pocketbase/pocketbase/tools/mailer"
+	"github.com/pocketbase/pocketbase/tools/security"
 )
 
 func TestNewBaseApp(t *testing.T) {
@@ -435,6 +436,65 @@ func TestBaseAppLoggerWritesAwaited(t *testing.T) {
 
 		assertLogsCount(t, app, 202)
 	})
+}
+
+func TestBaseAppLoggerWritesInvalidRowsOnProductionSchema(t *testing.T) {
+	const testDataDir = "./pb_base_app_logs_test_data_dir/"
+	defer os.RemoveAll(testDataDir)
+
+	// fresh databases -> the _logs table is created by the system migrations
+	// (JSONB data column, production indexes) and not by the test fixtures
+	app, cleanup := core.NewBaseAppForTest(core.BaseAppConfig{
+		DataDir: testDataDir,
+	})
+	defer cleanup()
+
+	if err := app.Bootstrap(); err != nil {
+		t.Fatal(err)
+	}
+	defer app.ClearBootstrap()
+
+	var dataType string
+	err := app.AuxDB().NewQuery("SELECT data_type FROM information_schema.columns WHERE table_name = '_logs' AND column_name = 'data'").Row(&dataType)
+	if err != nil || dataType != "jsonb" {
+		t.Fatalf("Expected the production jsonb _logs.data column, got %q (%v)", dataType, err)
+	}
+
+	app.Settings().Logs.MaxDays = 1
+
+	// incompressible message larger than the 2704 bytes B-tree index row limit
+	longMessage := security.RandomString(3000)
+
+	app.Logger().Info("valid1")
+	app.Logger().Info("nul\x00byte")
+	app.Logger().Info("invalid\xffutf8")
+	app.Logger().Info("nul in data", "details", "a\x00b")
+	app.Logger().Info(longMessage)
+	app.Logger().Info("valid2")
+
+	ctx := context.WithValue(context.Background(), logger.BlockKey, true)
+	if err := app.Logger().Handler().(*logger.BatchHandler).WriteAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var messages []string
+	err = app.AuxDB().Select("message").From(core.LogsTableName).OrderBy("message ASC").Column(&messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := []string{"invalid\uFFFDutf8", longMessage, "nul in data", "nulbyte", "valid1", "valid2"}
+	slices.Sort(expected)
+	slices.Sort(messages)
+	if !slices.Equal(messages, expected) {
+		t.Fatalf("Expected logs\n%q\ngot\n%q", expected, messages)
+	}
+
+	var details string
+	err = app.AuxDB().NewQuery("SELECT data->>'details' FROM {{_logs}} WHERE message = 'nul in data'").Row(&details)
+	if err != nil || details != "ab" {
+		t.Fatalf("Expected sanitized details %q, got %q (%v)", "ab", details, err)
+	}
 }
 
 func TestBaseAppRefreshSettingsLoggerMinLevelEnabled(t *testing.T) {

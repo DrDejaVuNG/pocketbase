@@ -1,7 +1,7 @@
 package pocketbase
 
 import (
-"errors"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -45,6 +45,11 @@ type PocketBase struct {
 	queryTimeout       int
 	hideStartBanner    bool
 
+	dataMaxOpenConnsFlag int
+	dataMaxIdleConnsFlag int
+	auxMaxOpenConnsFlag  int
+	auxMaxIdleConnsFlag  int
+
 	// RootCmd is the main console command
 	RootCmd *cobra.Command
 }
@@ -65,6 +70,8 @@ type Config struct {
 	DefaultQueryTimeout   time.Duration // default to core.DefaultQueryTimeout (in seconds)
 
 	// optional DB configurations
+	// (if not set, they fallback to the PB_DATA_MAX_OPEN_CONNS, PB_DATA_MAX_IDLE_CONNS,
+	// PB_AUX_MAX_OPEN_CONNS and PB_AUX_MAX_IDLE_CONNS env variables and then to the core defaults)
 	DataMaxOpenConns int                // default to core.DefaultDataMaxOpenConns
 	DataMaxIdleConns int                // default to core.DefaultDataMaxIdleConns
 	AuxMaxOpenConns  int                // default to core.DefaultAuxMaxOpenConns
@@ -131,6 +138,13 @@ func NewWithConfig(config Config) *PocketBase {
 		config.DefaultQueryTimeout = core.DefaultQueryTimeout
 	}
 
+	// PostgreSQL: the db pools are per node and their sizes must fit the
+	// server max_connections for all nodes (see core.DefaultDataMaxOpenConns)
+	config.DataMaxOpenConns = positiveIntConfig(config.DataMaxOpenConns, "PB_DATA_MAX_OPEN_CONNS", core.DefaultDataMaxOpenConns)
+	config.DataMaxIdleConns = positiveIntConfig(config.DataMaxIdleConns, "PB_DATA_MAX_IDLE_CONNS", core.DefaultDataMaxIdleConns)
+	config.AuxMaxOpenConns = positiveIntConfig(config.AuxMaxOpenConns, "PB_AUX_MAX_OPEN_CONNS", core.DefaultAuxMaxOpenConns)
+	config.AuxMaxIdleConns = positiveIntConfig(config.AuxMaxIdleConns, "PB_AUX_MAX_IDLE_CONNS", core.DefaultAuxMaxIdleConns)
+
 	executableName := filepath.Base(os.Args[0])
 
 	pb := &PocketBase{
@@ -174,10 +188,10 @@ func NewWithConfig(config Config) *PocketBase {
 		IsRealtimeBridge: pb.realtimeBridgeFlag,
 		EncryptionEnv:    pb.encryptionEnvFlag,
 		QueryTimeout:     time.Duration(pb.queryTimeout) * time.Second,
-		DataMaxOpenConns: config.DataMaxOpenConns,
-		DataMaxIdleConns: config.DataMaxIdleConns,
-		AuxMaxOpenConns:  config.AuxMaxOpenConns,
-		AuxMaxIdleConns:  config.AuxMaxIdleConns,
+		DataMaxOpenConns: pb.dataMaxOpenConnsFlag,
+		DataMaxIdleConns: pb.dataMaxIdleConnsFlag,
+		AuxMaxOpenConns:  pb.auxMaxOpenConnsFlag,
+		AuxMaxIdleConns:  pb.auxMaxIdleConnsFlag,
 		DBConnect:        config.DBConnect,
 	})
 
@@ -267,10 +281,12 @@ func (pb *PocketBase) eagerParseFlags(config *Config) error {
 		"the PocketBase data directory",
 	)
 
+	// PostgreSQL: no flag default value because cobra prints it
+	// in the --help output (the connection string contains the password)
 	pb.RootCmd.PersistentFlags().StringVar(
 		&pb.postgresUrlFlag,
 		"postgresUrl",
-		config.DefaultPostgresURL,
+		"",
 		"the Postgres connection string (if not set, it will fallback to the POSTGRES_URL env variable)",
 	)
 
@@ -316,7 +332,60 @@ func (pb *PocketBase) eagerParseFlags(config *Config) error {
 		fmt.Sprintf("enable/disable the realtime bridge (default %v). You must not disable this flag if you plan horizontally scale your app.", *config.DefaultRealtimeBridge),
 	)
 
-	return pb.RootCmd.ParseFlags(os.Args[1:])
+	pb.RootCmd.PersistentFlags().IntVar(
+		&pb.dataMaxOpenConnsFlag,
+		"dataMaxOpenConns",
+		config.DataMaxOpenConns,
+		"the max open connections of the data db pool per node (if not set, it will fallback to the PB_DATA_MAX_OPEN_CONNS env variable)",
+	)
+
+	pb.RootCmd.PersistentFlags().IntVar(
+		&pb.dataMaxIdleConnsFlag,
+		"dataMaxIdleConns",
+		config.DataMaxIdleConns,
+		"the max idle connections of the data db pool per node (if not set, it will fallback to the PB_DATA_MAX_IDLE_CONNS env variable)",
+	)
+
+	pb.RootCmd.PersistentFlags().IntVar(
+		&pb.auxMaxOpenConnsFlag,
+		"auxMaxOpenConns",
+		config.AuxMaxOpenConns,
+		"the max open connections of the auxiliary db pool per node (if not set, it will fallback to the PB_AUX_MAX_OPEN_CONNS env variable)",
+	)
+
+	pb.RootCmd.PersistentFlags().IntVar(
+		&pb.auxMaxIdleConnsFlag,
+		"auxMaxIdleConns",
+		config.AuxMaxIdleConns,
+		"the max idle connections of the auxiliary db pool per node (if not set, it will fallback to the PB_AUX_MAX_IDLE_CONNS env variable)",
+	)
+
+	err := pb.RootCmd.ParseFlags(os.Args[1:])
+
+	if pb.postgresUrlFlag == "" {
+		pb.postgresUrlFlag = config.DefaultPostgresURL
+	}
+
+	return err
+}
+
+// positiveIntConfig returns value if it is positive, otherwise the positive
+// integer value of the envKey env variable, otherwise defaultValue.
+func positiveIntConfig(value int, envKey string, defaultValue int) int {
+	if value > 0 {
+		return value
+	}
+
+	if raw := os.Getenv(envKey); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err == nil && v > 0 {
+			return v
+		}
+
+		fmt.Fprintf(os.Stderr, "Ignoring invalid %s=%q (expected a positive integer), fallback to %d.\n", envKey, raw, defaultValue)
+	}
+
+	return defaultValue
 }
 
 // skipBootstrap eagerly checks if the app should skip the bootstrap process:

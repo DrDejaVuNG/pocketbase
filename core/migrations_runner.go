@@ -1,6 +1,9 @@
 package core
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"strings"
 	"time"
@@ -22,6 +25,10 @@ type MigrationsRunner struct {
 	tableName      string
 	migrationsList MigrationsList
 	inited         bool
+
+	// PostgreSQL: lockHeld indicates that the caller already holds
+	// the cross-node migrations lock (see withMigrationsLock).
+	lockHeld bool
 }
 
 // NewMigrationsRunner creates and initializes a new db migrations MigrationsRunner instance.
@@ -40,7 +47,7 @@ func NewMigrationsRunner(app App, migrationsList MigrationsList) *MigrationsRunn
 // - down [n]     - reverts the last n (default 1) applied migrations
 // - history-sync - syncs the migrations table with the runner's migrations list
 func (r *MigrationsRunner) Run(args ...string) error {
-	if err := r.initMigrationsTable(); err != nil {
+	if err := r.withLock(r.initMigrationsTable); err != nil {
 		return err
 	}
 
@@ -120,6 +127,24 @@ func (r *MigrationsRunner) Run(args ...string) error {
 //
 // On success returns list with the applied migrations file names.
 func (r *MigrationsRunner) Up() ([]string, error) {
+	var applied []string
+
+	// PostgreSQL: several nodes may run the same migrations at the same time
+	// (e.g. on first boot or when deploying new migrations) so the applied
+	// migrations are checked and executed while holding the migrations lock
+	err := r.withLock(func() error {
+		var err error
+		applied, err = r.up()
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return applied, nil
+}
+
+func (r *MigrationsRunner) up() ([]string, error) {
 	if err := r.initMigrationsTable(); err != nil {
 		return nil, err
 	}
@@ -177,6 +202,22 @@ func (r *MigrationsRunner) Up() ([]string, error) {
 //
 // On success returns list with the reverted migrations file names.
 func (r *MigrationsRunner) Down(toRevertCount int) ([]string, error) {
+	var reverted []string
+
+	// PostgreSQL: see Up()
+	err := r.withLock(func() error {
+		var err error
+		reverted, err = r.down(toRevertCount)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return reverted, nil
+}
+
+func (r *MigrationsRunner) down(toRevertCount int) ([]string, error) {
 	if err := r.initMigrationsTable(); err != nil {
 		return nil, err
 	}
@@ -322,4 +363,102 @@ func (r *MigrationsRunner) lastAppliedMigrations(limit int) ([]string, error) {
 	}
 
 	return files, nil
+}
+
+// PostgreSQL:
+// Session level advisory lock keys serializing the migrations (and the
+// initial settings insert, see BaseApp.Bootstrap) across all nodes sharing
+// the same databases.
+//
+// The data and auxiliary keys are distinct so that the two locks don't block
+// each other when both names point to the same physical database. They are
+// also distinct from the transaction level keys used by the system migrations.
+const (
+	migrationsLockKeyData int64 = 723390692
+	migrationsLockKeyAux  int64 = 723390693
+)
+
+func (r *MigrationsRunner) withLock(fn func() error) error {
+	if r.lockHeld {
+		return fn()
+	}
+
+	return withMigrationsLock(r.app, fn)
+}
+
+// withMigrationsLock executes fn while holding a session level
+// pg_advisory_lock on a dedicated connection from the data db pool
+// and another one from the auxiliary db pool.
+//
+// Since session level advisory locks are not reentrant across connections,
+// fn must not call withMigrationsLock again (use MigrationsRunner.lockHeld).
+//
+// No lock is acquired for a transactional app
+// (the caller is responsible to serialize the transaction).
+func withMigrationsLock(app App, fn func() error) error {
+	ctx := context.Background()
+
+	locks := []struct {
+		builder dbx.Builder
+		key     int64
+	}{
+		// always acquired in the same order to avoid deadlocks between nodes
+		{app.ConcurrentDB(), migrationsLockKeyData},
+		{app.AuxConcurrentDB(), migrationsLockKeyAux},
+	}
+
+	for _, l := range locks {
+		db, ok := l.builder.(*dbx.DB)
+		if !ok {
+			continue // transaction or not bootstrapped
+		}
+
+		conn, err := pgAdvisoryLock(ctx, db.DB(), l.key)
+		if err != nil {
+			return fmt.Errorf("failed to acquire the migrations lock: %w", err)
+		}
+		defer pgAdvisoryUnlock(ctx, conn, l.key)
+	}
+
+	return fn()
+}
+
+// pgAdvisoryLock waits for and acquires the session level advisory lock key
+// on a dedicated pool connection that is returned to the caller.
+func pgAdvisoryLock(ctx context.Context, db *sql.DB, key int64) (*sql.Conn, error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", key); err != nil {
+		discardConn(conn)
+		return nil, err
+	}
+
+	return conn, nil
+}
+
+// pgAdvisoryUnlock releases the session level advisory lock key
+// previously acquired with pgAdvisoryLock.
+func pgAdvisoryUnlock(ctx context.Context, conn *sql.Conn, key int64) {
+	var unlocked bool
+
+	err := conn.QueryRowContext(ctx, "SELECT pg_advisory_unlock($1)", key).Scan(&unlocked)
+	if err != nil || !unlocked {
+		// never return a connection that may still hold the lock to the pool
+		// (closing the session releases all of its advisory locks)
+		discardConn(conn)
+		return
+	}
+
+	conn.Close()
+}
+
+// discardConn closes the underlying driver connection instead of returning it to the pool.
+func discardConn(conn *sql.Conn) {
+	_ = conn.Raw(func(any) error {
+		return driver.ErrBadConn
+	})
+	_ = conn.Close()
 }

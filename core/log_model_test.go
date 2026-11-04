@@ -117,3 +117,67 @@ func TestLogDBExport(t *testing.T) {
 		})
 	}
 }
+
+func TestLogDBExportSanitizesTextForPostgres(t *testing.T) {
+	t.Parallel()
+
+	testApp, _ := tests.NewTestApp()
+	defer testApp.Cleanup()
+
+	scenarios := []struct {
+		name          string
+		log           core.Log
+		expectMessage string
+		expectData    string
+	}{
+		{
+			"NUL bytes",
+			core.Log{
+				Message: "GET /x?a=\x00b",
+				Data:    types.JSONMap[any]{"details": "a\x00b", "k\x00": `\u0000`},
+			},
+			"GET /x?a=b",
+			// the escaped backslash + literal "u0000" must be preserved
+			`{"details":"ab","k":"\\u0000"}`,
+		},
+		{
+			"invalid UTF-8",
+			core.Log{
+				Message: "GET /x?a=\xff\xc0\xafb",
+				Data:    types.JSONMap[any]{"details": "a\xffb"},
+			},
+			"GET /x?a=\uFFFDb",
+			`{"details":"a` + "\uFFFD" + `b"}`,
+		},
+		{
+			"truncation on a rune boundary",
+			core.Log{
+				// 7999 single-byte chars + a 3 byte rune crossing the 8000 bytes limit
+				Message: strings.Repeat("a", 7999) + "€",
+			},
+			strings.Repeat("a", 7999),
+			`{}`,
+		},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			result, err := s.log.DBExport(testApp)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if msg := result["message"].(string); msg != s.expectMessage {
+				t.Fatalf("Expected message %q, got %q", s.expectMessage, msg)
+			}
+
+			rawData, err := json.Marshal(result["data"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(rawData) != s.expectData {
+				t.Fatalf("Expected data %s, got %s", s.expectData, rawData)
+			}
+		})
+	}
+}
