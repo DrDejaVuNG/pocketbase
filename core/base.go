@@ -489,6 +489,7 @@ func (app *BaseApp) Bootstrap() error {
 			return err
 		}
 
+		/* SQLite:
 		if err := app.RunSystemMigrations(); err != nil {
 			return err
 		}
@@ -498,6 +499,26 @@ func (app *BaseApp) Bootstrap() error {
 		}
 
 		if err := app.ReloadSettings(); err != nil {
+			return err
+		}
+		*/
+		// PostgreSQL: several nodes may bootstrap at the same time against
+		// the same databases, so the system migrations and the initial
+		// settings insert (in ReloadSettings) are serialized across nodes.
+		err := withMigrationsLock(app, func() error {
+			runner := NewMigrationsRunner(app, SystemMigrations)
+			runner.lockHeld = true
+			if _, err := runner.Up(); err != nil {
+				return err
+			}
+
+			if err := app.ReloadCachedCollections(); err != nil {
+				return err
+			}
+
+			return app.ReloadSettings()
+		})
+		if err != nil {
 			return err
 		}
 
