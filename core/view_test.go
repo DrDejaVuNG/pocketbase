@@ -652,6 +652,25 @@ func TestCreateViewFields(t *testing.T) {
 				"alias4": core.FieldTypeText,
 			},
 		},
+		{
+			"query with uppercase and mixed case AS aliases",
+			`SELECT
+				a.id AS id,
+				a.text AS title,
+				a.rel_one As r,
+				a.file_one aS f,
+				a.number AS n
+			FROM demo1 AS a
+			LEFT JOIN demo2 As b ON 1 = 1`,
+			false,
+			map[string]string{
+				"id":    core.FieldTypeText,
+				"title": core.FieldTypeText,
+				"r":     core.FieldTypeRelation,
+				"f":     core.FieldTypeFile,
+				"n":     core.FieldTypeNumber,
+			},
+		},
 	}
 
 	for _, s := range scenarios {

@@ -793,7 +793,12 @@ func identifierFromParts(parts []string) (identifier, error) {
 	// - `ROW_NUMBER() OVER (PARTITION BY id ORDER BY created DESC) as row_number`
 	var result identifier
 	result.alias = parts[len(parts)-1]
-	result.original = strings.TrimSuffix(strings.Join(parts[:len(parts)-1], " "), " as")
+	originalParts := parts[:len(parts)-1]
+	// the "as" keyword is case-insensitive (`AS`, `As`, `as`)
+	if len(originalParts) > 1 && strings.EqualFold(originalParts[len(originalParts)-1], "as") {
+		originalParts = originalParts[:len(originalParts)-1]
+	}
+	result.original = strings.Join(originalParts, " ")
 
 	result.alias = trimRawIdentifier(result.alias)
 	result.original = trimRawIdentifier(result.original)
