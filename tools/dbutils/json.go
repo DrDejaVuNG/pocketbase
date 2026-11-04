@@ -28,13 +28,16 @@ func JSONEach(column string) string {
 	)
 }
 
-// JSONEachByPlaceholder expands a given user input json array to multiple rows.
+// JSONEachByPlaceholder expands a given user input json array to multiple text rows
+// (the column name is "value", similar to [JSONEach]).
 // Use [JSONEach] if you want to expand a column value instead.
 // The [placeholder] is the parameter placeholder in SQL prepared statements.
 // We assume the parameter value is a marshalled JSON array.
 func JSONEachByPlaceholder(placeholder string) string {
+	// note: the elements are expanded as text (eg. "abc" -> abc) so that they
+	// could be compared directly with the text columns and string literals
 	return fmt.Sprintf(
-		`jsonb_array_elements({:%s}::jsonb)`,
+		`jsonb_array_elements_text({:%s}::jsonb)`,
 		placeholder,
 	)
 }

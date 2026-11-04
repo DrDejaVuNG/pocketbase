@@ -52,8 +52,12 @@ var queryCases = []queryCase{
 	{`featured != true`, []string{"hello again", "100% Coverage", "snake_case tips", "Ünïcödé Straße"}},
 	{`(featured = true || views > 100) && status = 'published'`, []string{"Hello World", "snakeXcase"}},
 	{`slug = ''`, []string{"hello again", "snakeXcase", "Ünïcödé Straße"}},
-	{`tags ?= 'pg'`, []string{"Hello World", "snakeXcase"}},
-	{`tags ?= 'go' && tags ?= 'pg'`, []string{"Hello World"}},
+	// plain multi-value fields compare the raw json array text in upstream
+	// (verified with v0.40.6 on SQLite: `tags = 'pg'` and `tags ?= 'pg'` -> 0 rows);
+	// element matching requires the :each modifier
+	{`tags ?= 'pg'`, []string{}},
+	{`tags ?= 'go' && tags ?= 'pg'`, []string{}},
+	{`tags:each ?= 'pg'`, []string{"Hello World", "snakeXcase"}},
 	{`tags:length > 1`, []string{"Hello World", "snakeXcase"}},
 	{`tags:length = 0`, []string{"snake_case tips"}},
 	{`tags ~ 'sql'`, []string{"snakeXcase"}},
@@ -70,6 +74,8 @@ var queryCases = []queryCase{
 	{`created >= @todayStart`, nil}, // nil = all seeded posts
 	{`author.name = 'Quinn'`, nil},
 	{`author.org.name ~ 'Org Q'`, nil},
+	// @collection.* client filters are superuser only (upstream checkForSuperuserOnlyRuleFields)
+	// and are executed with the superuser token, scoped to the seeded org
 	{`@collection.comments.post ?= id && @collection.comments.body ?~ 'great'`, []string{"Hello World"}},
 	{`comments_via_post.body ?~ 'GREAT'`, []string{"Hello World"}},
 }
@@ -133,7 +139,17 @@ func TestQuery(t *testing.T) {
 			if want == nil {
 				want = allTitles
 			}
-			r := list(url.Values{"filter": {tc.filter}})
+			var r apiResp
+			if strings.HasPrefix(tc.filter, "@collection.") {
+				params := url.Values{"perPage": {"100"}, "filter": {"(" + tc.filter + ") && org = '" + orgQ + "'"}}
+				var err error
+				r, err = call(f.node(0), f.suToken, "GET", "/api/collections/posts/records?"+params.Encode(), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				r = list(url.Values{"filter": {tc.filter}})
+			}
 			if r.Status != 200 {
 				t.Errorf("%s\n    -> %s", tc.filter, r)
 				continue

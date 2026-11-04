@@ -845,6 +845,23 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 		}
 	}
 
+	// PostgreSQL only:
+	// multi-value fields are stored as JSONB arrays and comparing them directly with
+	// an untyped string param (eg. "tags = 'a'") would try to parse the param as json.
+	// The explicit type allows the filter builder to normalize the other operand
+	// (eg. "tags = 'a'" compares the array with the json string "a", aka. false like in SQLite).
+	if isMultivaluer && multvaluer.IsMultiple() {
+		typeCast := "::jsonb"
+		if modifier == lowerModifier {
+			typeCast = "::text" // LOWER(jsonb) is not supported
+		}
+
+		result.Identifier += typeCast
+		if r.withMultiMatch {
+			r.multiMatch.ValueIdentifier += typeCast
+		}
+	}
+
 	// account for the ":lower" modifier
 	if modifier == lowerModifier {
 		result.Identifier = "LOWER(" + result.Identifier + ")"

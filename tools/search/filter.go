@@ -1,9 +1,11 @@
 package search
 
 import (
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -186,6 +188,13 @@ func buildResolversExpr(
 ) (dbx.Expression, error) {
 	var expr dbx.Expression
 
+	// PostgreSQL only:
+	// align the operand types to avoid implicit param type inference issues
+	// (eg. "1.5" inferred as int4 because of an integer literal on the other side)
+	if !isLikeOp(op) {
+		left, right = normalizeOperandTypes(left, right)
+	}
+
 	switch op {
 	case fexpr.SignEq, fexpr.SignAnyEq:
 		expr = resolveEqualExpr(true, left, right)
@@ -198,12 +207,14 @@ func buildResolversExpr(
 			expr = dbx.NewExp(fmt.Sprintf("%s LIKE ('%%' || %s || '%%') ESCAPE '\\'", left.Identifier, right.Identifier), left.Params)
 			*/
 			// PostgreSQL:
-			expr = dbx.NewExp(fmt.Sprintf("%s LIKE ('%%' || %s || '%%') ESCAPE '\\'", castToText(left), castToText(right)), left.Params)
+			// ILIKE to match the SQLite LIKE case-insensitive behavior
+			expr = dbx.NewExp(fmt.Sprintf("%s ILIKE ('%%' || %s || '%%') ESCAPE '\\'", castToText(left), castToText(right)), left.Params)
 		} else {
 			/* SQLite:
 			expr = dbx.NewExp(fmt.Sprintf("%s LIKE %s ESCAPE '\\'", left.Identifier, right.Identifier), mergeParams(left.Params, wrapLikeParams(right.Params)))
 			*/
-			expr = dbx.NewExp(fmt.Sprintf("%s LIKE %s ESCAPE '\\'", castToText(left), castToText(right)), mergeParams(left.Params, wrapLikeParams(right.Params)))
+			// PostgreSQL:
+			expr = dbx.NewExp(fmt.Sprintf("%s ILIKE %s ESCAPE '\\'", castToText(left), castToText(right)), mergeParams(left.Params, wrapLikeParams(right.Params)))
 		}
 	case fexpr.SignNlike, fexpr.SignAnyNlike:
 		// the right side is a column and therefor wrap it with "%" for not-contains like behavior
@@ -212,12 +223,13 @@ func buildResolversExpr(
 			expr = dbx.NewExp(fmt.Sprintf("%s NOT LIKE ('%%' || %s || '%%') ESCAPE '\\'", left.Identifier, right.Identifier), left.Params)
 			*/
 			// PostgreSQL:
-			expr = dbx.NewExp(fmt.Sprintf("%s NOT LIKE ('%%' || %s || '%%') ESCAPE '\\'", castToText(left), castToText(right)), left.Params)
+			expr = dbx.NewExp(fmt.Sprintf("%s NOT ILIKE ('%%' || %s || '%%') ESCAPE '\\'", castToText(left), castToText(right)), left.Params)
 		} else {
 			/* SQLite:
 			expr = dbx.NewExp(fmt.Sprintf("%s NOT LIKE %s ESCAPE '\\'", left.Identifier, right.Identifier), mergeParams(left.Params, wrapLikeParams(right.Params)))
 			*/
-			expr = dbx.NewExp(fmt.Sprintf("%s NOT LIKE %s ESCAPE '\\'", castToText(left), castToText(right)), mergeParams(left.Params, wrapLikeParams(right.Params)))
+			// PostgreSQL:
+			expr = dbx.NewExp(fmt.Sprintf("%s NOT ILIKE %s ESCAPE '\\'", castToText(left), castToText(right)), mergeParams(left.Params, wrapLikeParams(right.Params)))
 		}
 	case fexpr.SignLt, fexpr.SignAnyLt:
 		/* SQLite:
@@ -318,6 +330,24 @@ func resolveToken(token fexpr.Token, fieldResolver FieldResolver) (*ResolverResu
 			macroValue, err := macroFunc()
 			if err != nil {
 				return nil, err
+			}
+
+			/* SQLite:
+			return &ResolverResult{
+				Identifier: "{:" + placeholder + "}",
+				Params:     dbx.Params{placeholder: macroValue},
+			}, nil
+			*/
+			// PostgreSQL:
+			// Numeric macros (@year, @month, etc.) are sent as untyped text params
+			// so that PostgreSQL could infer their type from the other operand
+			// (eg. text for "title = @year" or "strftime(...) = @year", numeric for "views > @year").
+			// pgx can't encode a Go int into a text param and an explicit ::numeric cast
+			// would fail against text operands. Comparisons with number literals
+			// are handled by normalizeOperandTypes.
+			switch v := macroValue.(type) {
+			case int:
+				macroValue = strconv.Itoa(v)
 			}
 
 			return &ResolverResult{
@@ -606,14 +636,45 @@ func castToJsonb(identifier *ResolverResult) string {
 		return "to_jsonb(NULL::text)"
 	}
 	if tp := inferPolymorphicLiteral(identifier); tp != "" {
+		// json array/object params (eg. "@request.body.tags" for a multiple select field)
+		// are compared as json values instead of a json string
+		if tp == "text" && isJSONContainerParam(identifier) {
+			return identifier.Identifier + "::jsonb"
+		}
 		return fmt.Sprintf("to_jsonb(%s::%s)", identifier.Identifier, tp)
 	}
 	return fmt.Sprintf("to_jsonb(%s)", identifier.Identifier)
 }
 
+// isJSONContainerParam reports whether the identifier is a plain text param
+// placeholder with a valid serialized json array or object value.
+func isJSONContainerParam(identifier *ResolverResult) bool {
+	if !regexPlainPlaceholder.MatchString(identifier.Identifier) {
+		return false
+	}
+
+	for _, v := range identifier.Params {
+		str, ok := v.(string)
+		if !ok {
+			return false
+		}
+
+		str = strings.TrimSpace(str)
+
+		return (strings.HasPrefix(str, "[") || strings.HasPrefix(str, "{")) && jsontext.Value(str).IsValid()
+	}
+
+	return false
+}
+
 func castToText(identifier *ResolverResult) string {
 	if inferPolymorphicLiteral(identifier) == "text" {
 		return identifier.Identifier
+	}
+	// extract the unquoted text value of a jsonb scalar (eg. "abc" -> abc)
+	// for consistency with the SQLite json_extract (and to avoid matching the JSON quotes)
+	if inferDeterministicType(identifier) == "jsonb" {
+		return "(" + identifier.Identifier + " #>> '{}')"
 	}
 	return withNonJsonbType(identifier.Identifier, "text")
 }
@@ -765,6 +826,94 @@ func withNonJsonbType(identifier string, targetType string) string {
 		return identifier
 	}
 	return identifier + suffix
+}
+
+// PostgreSQL only:
+// normalizeOperandTypes aligns the operand types when one of the operands
+// is a deterministic numeric (eg. a number literal or a ::numeric param)
+// and the other one is boolean or an untyped text literal/param.
+//
+// Without it PostgreSQL infers the type of the untyped text param from the
+// numeric operand (eg. int4 for an integer literal) and fails with
+// "invalid input syntax for type integer" for values like "1.5" or "abc".
+//
+// - numeric vs numeric text param -> the text param is compared as numeric
+// - numeric vs other text         -> both operands are compared as text
+// - numeric vs boolean            -> the boolean is compared as 1/0 (similar to SQLite)
+func normalizeOperandTypes(left, right *ResolverResult) (*ResolverResult, *ResolverResult) {
+	lType := inferDeterministicType(left)
+	rType := inferDeterministicType(right)
+
+	switch {
+	case lType == "numeric" && rType == "boolean":
+		right = withResolverIdentifier(right, booleanAsNumeric(right.Identifier))
+	case lType == "boolean" && rType == "numeric":
+		left = withResolverIdentifier(left, booleanAsNumeric(left.Identifier))
+	case lType == "numeric" && rType == "" && isUntypedTextOperand(right):
+		left, right = alignTextWithNumeric(left, right)
+	case lType == "" && rType == "numeric" && isUntypedTextOperand(left):
+		right, left = alignTextWithNumeric(right, left)
+	}
+
+	return left, right
+}
+
+// alignTextWithNumeric returns the numeric and text operands adjusted
+// so that they could be compared without a param type inference error.
+func alignTextWithNumeric(numeric, text *ResolverResult) (*ResolverResult, *ResolverResult) {
+	numericAsText := withResolverIdentifier(numeric, withNonJsonbType(numeric.Identifier, "text"))
+
+	// the empty string literal is already a text
+	if text.Identifier == `''` {
+		return numericAsText, text
+	}
+
+	for k, v := range text.Params {
+		num, err := strconv.ParseFloat(strings.TrimSpace(v.(string)), 64)
+		if err != nil || math.IsInf(num, 0) || math.IsNaN(num) {
+			break
+		}
+
+		result := withResolverIdentifier(text, text.Identifier+"::numeric")
+		result.Params = dbx.Params{k: num}
+
+		return numeric, result
+	}
+
+	return numericAsText, withResolverIdentifier(text, withNonJsonbType(text.Identifier, "text"))
+}
+
+func booleanAsNumeric(identifier string) string {
+	return "(" + identifier + ")::int::numeric"
+}
+
+// isUntypedTextOperand reports whether the provided resolver result is
+// an empty string literal or a single untyped text param placeholder.
+func isUntypedTextOperand(result *ResolverResult) bool {
+	if result.Identifier == `''` {
+		return true
+	}
+
+	return regexPlainPlaceholder.MatchString(result.Identifier) && isPlaceholderForTextType(result)
+}
+
+var regexPlainPlaceholder = regexp.MustCompile(`^\{:\w+\}$`)
+
+// withResolverIdentifier returns a shallow copy of the provided
+// resolver result with replaced identifier.
+func withResolverIdentifier(result *ResolverResult, identifier string) *ResolverResult {
+	clone := *result
+	clone.Identifier = identifier
+	return &clone
+}
+
+func isLikeOp(op fexpr.SignOp) bool {
+	switch op {
+	case fexpr.SignLike, fexpr.SignAnyLike, fexpr.SignNlike, fexpr.SignAnyNlike:
+		return true
+	}
+
+	return false
 }
 
 func hasEmptyParamValue(result *ResolverResult) bool {
@@ -1008,12 +1157,12 @@ func (e *manyVsManyExpr) Build(db *dbx.DB, params dbx.Params) string {
 	whereExpr, buildErr := buildResolversExpr(
 		&ResolverResult{
 			NullFallback: e.left.NullFallback,
-			Identifier:   "[[" + lAlias + ".multiMatchValue]]",
+			Identifier:   multiMatchValueIdentifier(lAlias, e.left.MultiMatchSubQuery),
 		},
 		e.op,
 		&ResolverResult{
 			NullFallback: e.right.NullFallback,
-			Identifier:   "[[" + rAlias + ".multiMatchValue]]",
+			Identifier:   multiMatchValueIdentifier(rAlias, e.right.MultiMatchSubQuery),
 			// note: the AfterBuild needs to be handled only once and it
 			// doesn't matter whether it is applied on the left or right subquery operand
 			AfterBuild: dbx.Not, // inverse for the not-exist expression
@@ -1067,7 +1216,7 @@ func (e *manyVsOneExpr) Build(db *dbx.DB, params dbx.Params) string {
 
 	r1 := &ResolverResult{
 		NullFallback: e.nullFallback,
-		Identifier:   "[[" + alias + ".multiMatchValue]]",
+		Identifier:   multiMatchValueIdentifier(alias, e.subQuery),
 		AfterBuild:   dbx.Not, // inverse for the not-exist expression
 	}
 
@@ -1095,4 +1244,21 @@ func (e *manyVsOneExpr) Build(db *dbx.DB, params dbx.Params) string {
 		alias,
 		whereExpr.Build(db, params),
 	)
+}
+
+// PostgreSQL only:
+// multiMatchValueIdentifier returns the multi-match subquery value column identifier
+// with the same explicit type cast as the subquery value expression (if any)
+// so that the type-aware comparisons could be applied (eg. unquoting jsonb for LIKE).
+func multiMatchValueIdentifier(alias string, subQuery dbx.Expression) string {
+	identifier := "[[" + alias + ".multiMatchValue]]"
+
+	if mm, ok := subQuery.(*MultiMatchSubquery); ok && mm != nil {
+		match := regexRightMostTypeCast.FindStringSubmatch(strings.TrimRight(mm.ValueIdentifier, " "))
+		if len(match) > 0 {
+			identifier += "::" + match[1]
+		}
+	}
+
+	return identifier
 }
