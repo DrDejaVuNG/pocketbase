@@ -3,8 +3,11 @@ package pocketbase
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
+	"github.com/pocketbase/pocketbase/core"
 	"github.com/spf13/cobra"
 )
 
@@ -207,4 +210,97 @@ func TestSkipBootstrap(t *testing.T) {
 			t.Fatalf("[-%s custom] Expected false, got true", s.short)
 		}
 	}
+}
+
+func withArgs(t *testing.T, args ...string) {
+	originalArgs := os.Args
+	t.Cleanup(func() {
+		os.Args = originalArgs
+	})
+
+	os.Args = append([]string{originalArgs[0]}, args...)
+}
+
+func TestNewDBPoolsConfig(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		withArgs(t)
+
+		app := NewWithConfig(Config{})
+
+		expected := []int{core.DefaultDataMaxOpenConns, core.DefaultDataMaxIdleConns, core.DefaultAuxMaxOpenConns, core.DefaultAuxMaxIdleConns}
+		got := []int{app.dataMaxOpenConnsFlag, app.dataMaxIdleConnsFlag, app.auxMaxOpenConnsFlag, app.auxMaxIdleConnsFlag}
+		if !slices.Equal(got, expected) {
+			t.Fatalf("Expected pools config %v, got %v", expected, got)
+		}
+	})
+
+	t.Run("env variables", func(t *testing.T) {
+		withArgs(t)
+		t.Setenv("PB_DATA_MAX_OPEN_CONNS", "11")
+		t.Setenv("PB_DATA_MAX_IDLE_CONNS", "3")
+		t.Setenv("PB_AUX_MAX_OPEN_CONNS", "invalid") // fallback to the default
+		t.Setenv("PB_AUX_MAX_IDLE_CONNS", "1")
+
+		app := NewWithConfig(Config{})
+
+		expected := []int{11, 3, core.DefaultAuxMaxOpenConns, 1}
+		got := []int{app.dataMaxOpenConnsFlag, app.dataMaxIdleConnsFlag, app.auxMaxOpenConnsFlag, app.auxMaxIdleConnsFlag}
+		if !slices.Equal(got, expected) {
+			t.Fatalf("Expected pools config %v, got %v", expected, got)
+		}
+	})
+
+	t.Run("flags over env variables", func(t *testing.T) {
+		withArgs(t, "--dataMaxOpenConns=12", "--dataMaxIdleConns=4", "--auxMaxOpenConns=5", "--auxMaxIdleConns=2")
+		t.Setenv("PB_DATA_MAX_OPEN_CONNS", "11")
+		t.Setenv("PB_AUX_MAX_OPEN_CONNS", "9")
+
+		app := NewWithConfig(Config{})
+
+		expected := []int{12, 4, 5, 2}
+		got := []int{app.dataMaxOpenConnsFlag, app.dataMaxIdleConnsFlag, app.auxMaxOpenConnsFlag, app.auxMaxIdleConnsFlag}
+		if !slices.Equal(got, expected) {
+			t.Fatalf("Expected pools config %v, got %v", expected, got)
+		}
+	})
+}
+
+func TestPostgresURLCredentialsNotLeaked(t *testing.T) {
+	secret := "pb" + "LeakCheck" + "42"
+
+	t.Run("help output", func(t *testing.T) {
+		withArgs(t)
+		t.Setenv("POSTGRES_URL", "postgres://"+"leak_user:"+secret+"@127.0.0.1:1/postgres")
+
+		app := NewWithConfig(Config{})
+
+		if app.postgresUrlFlag != os.Getenv("POSTGRES_URL") {
+			t.Fatalf("Expected the POSTGRES_URL env fallback, got %q", app.postgresUrlFlag)
+		}
+
+		// the flags part of the --help output
+		help := app.RootCmd.UsageString()
+		if !strings.Contains(help, "--postgresUrl") {
+			t.Fatalf("Expected the --postgresUrl flag in the usage output:\n%s", help)
+		}
+		if strings.Contains(help, secret) {
+			t.Fatalf("The --help output contains the connection string password:\n%s", help)
+		}
+	})
+
+	t.Run("malformed url", func(t *testing.T) {
+		withArgs(t)
+		// "%zz" is an invalid url escape
+		t.Setenv("POSTGRES_URL", "postgres://"+"leak_user:"+secret+"%zz@127.0.0.1:1/postgres")
+
+		app := NewWithConfig(Config{DefaultDataDir: t.TempDir()})
+
+		err := app.Bootstrap()
+		if err == nil {
+			t.Fatal("Expected Bootstrap error")
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("The error contains the connection string password: %v", err)
+		}
+	})
 }

@@ -29,13 +29,26 @@ func DefaultDBConnect(dbPath string) (*dbx.DB, error) {
 }
 
 // Sample Connection String: "postgres://<username>:<password>@127.0.0.1:<port>"
+//
+// An invalid connection string doesn't panic but results in a DBConnectFunc
+// that returns the validation error (without the connection string credentials).
 func PostgresDBConnectFunc(connectionString string) DBConnectFunc {
 	url, err := url.Parse(connectionString)
+	/* PostgreSQL (removed):
+	// panicked even for commands that don't connect (e.g. --help) and the
+	// url.Error message contains the raw connection string with the password
 	if err != nil {
 		panic(fmt.Errorf("invalid connection string: %s", err))
 	}
 	if url.Scheme != "postgres" && url.Scheme != "postgresql" {
 		panic(fmt.Errorf("invalid connection string scheme: [%s], must be [postgres] or [postgresql]", url.Scheme))
+	}
+	*/
+	if err != nil {
+		return failedDBConnect(errors.New("invalid Postgres connection string: malformed URL"))
+	}
+	if url.Scheme != "postgres" && url.Scheme != "postgresql" {
+		return failedDBConnect(fmt.Errorf("invalid Postgres connection string scheme: [%s], must be [postgres] or [postgresql]", url.Scheme))
 	}
 	// Prefer no client-side statement cache. pgx's default
 	// QueryExecModeCacheStatement caches a prepared statement's result
@@ -77,6 +90,13 @@ func PostgresDBConnectFunc(connectionString string) DBConnectFunc {
 		}
 
 		return db, nil
+	}
+}
+
+// failedDBConnect returns a DBConnectFunc that always fails with err.
+func failedDBConnect(err error) DBConnectFunc {
+	return func(dbName string) (*dbx.DB, error) {
+		return nil, err
 	}
 }
 

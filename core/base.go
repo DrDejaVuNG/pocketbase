@@ -35,15 +35,24 @@ import (
 const (
 	/* SQLite:
 	DefaultDataMaxOpenConns int           = 120
-	*/
-	// PostgreSQL:
-	// Note: the default server side max connections limit in PostgreSQL is 100.
-	// Now: 20 Aux connections + 70 Data connections = 90 total connections.
-	// Leave some room for other connections (ex. pgAdmin, etc.).
-	DefaultDataMaxOpenConns int           = 70
 	DefaultDataMaxIdleConns int           = 15
 	DefaultAuxMaxOpenConns  int           = 20
 	DefaultAuxMaxIdleConns  int           = 3
+	*/
+	// PostgreSQL:
+	// The pools are per node, so the budget must hold for all nodes together:
+	//   nodes × (DataMaxOpenConns + AuxMaxOpenConns) <= max_connections - superuser_reserved_connections
+	// The defaults (20 + 4 = 24 per node) fit 4 nodes in the PostgreSQL defaults
+	// (100 - 3 = 97 connections for regular roles). Note that the data pool
+	// also provides the 2 LISTEN connections of the realtime bridge and,
+	// while migrating, the migrations lock connection.
+	// The sizes could be changed with the PB_DATA_MAX_OPEN_CONNS,
+	// PB_DATA_MAX_IDLE_CONNS, PB_AUX_MAX_OPEN_CONNS and PB_AUX_MAX_IDLE_CONNS
+	// env variables (or the related pocketbase.Config fields and flags).
+	DefaultDataMaxOpenConns int           = 20
+	DefaultDataMaxIdleConns int           = 5
+	DefaultAuxMaxOpenConns  int           = 4
+	DefaultAuxMaxIdleConns  int           = 2
 	DefaultQueryTimeout     time.Duration = 30 * time.Second
 
 	LocalStorageDirName       string = "storage"
