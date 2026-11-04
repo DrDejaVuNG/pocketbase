@@ -207,6 +207,32 @@ func (app *BaseApp) hasTable(db dbx.Builder, tableName string) bool {
 	return err == nil && exists > 0
 }
 
+// PostgreSQL:
+// maxIdentifierLength is the max PostgreSQL identifier length in bytes (NAMEDATALEN-1).
+//
+// Longer table, column and index names are silently truncated by PostgreSQL,
+// which breaks the name based lookups of the records tables and columns.
+const maxIdentifierLength = 63
+
+// PostgreSQL:
+// hasExactTable checks if a table (or view) with the exact provided name exists (case sensitive).
+//
+// Unlike SQLite, quoted PostgreSQL identifiers are case-sensitive, so the
+// records table sync must not treat "demo" and "Demo" as the same table.
+func hasExactTable(db dbx.Builder, tableName string) bool {
+	var exists int
+
+	err := db.NewQuery(`
+		SELECT 1
+		FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_name = {:tableName}
+		LIMIT 1
+	`).Bind(dbx.Params{"tableName": tableName}).Row(&exists)
+
+	return err == nil && exists > 0
+}
+
 // Vacuum executes VACUUM on the data.db in order to reclaim unused data db disk space.
 func (app *BaseApp) Vacuum() error {
 	return app.vacuum(app.NonconcurrentDB())

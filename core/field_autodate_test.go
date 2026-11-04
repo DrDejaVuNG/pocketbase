@@ -28,10 +28,55 @@ func TestAutodateFieldColumnType(t *testing.T) {
 	expected := "TEXT DEFAULT '' NOT NULL"
 	*/
 	// PostgreSQL:
-	expected := "TIMESTAMP DEFAULT NOW() NOT NULL"
+	expected := "TIMESTAMP DEFAULT NOW()"
 
 	if v := f.ColumnType(app); v != expected {
 		t.Fatalf("Expected\n%q\ngot\n%q", expected, v)
+	}
+}
+
+// PostgreSQL: an autodate field with onCreate=false must not break the record create
+// (the zero DateTime value is stored as NULL).
+func TestAutodateFieldOnUpdateOnlyCreate(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	collection := core.NewBaseCollection("autodate_update_only")
+	collection.Fields.Add(
+		&core.TextField{Name: "title"},
+		&core.AutodateField{Name: "touched", OnCreate: false, OnUpdate: true},
+	)
+	if err := app.Save(collection); err != nil {
+		t.Fatal(err)
+	}
+
+	record := core.NewRecord(collection)
+	record.Set("title", "a")
+	if err := app.Save(record); err != nil {
+		t.Fatalf("Expected the record create to succeed, got %v", err)
+	}
+
+	created, err := app.FindRecordById(collection, record.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created.GetDateTime("touched").IsZero() {
+		t.Fatalf("Expected zero touched value after create, got %v", created.GetDateTime("touched"))
+	}
+
+	created.Set("title", "b")
+	if err := app.Save(created); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := app.FindRecordById(collection, record.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.GetDateTime("touched").IsZero() {
+		t.Fatal("Expected non-zero touched value after update")
 	}
 }
 

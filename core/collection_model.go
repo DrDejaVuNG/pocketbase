@@ -989,7 +989,13 @@ func onCollectionSaveExecute(e *CollectionEvent) error {
 
 	// trigger an update for all views with changed fields as a result of the current collection save
 	// (only log the error to allow users to adjust the problematic view queries from the UI)
+	/* SQLite:
 	depViewsErr := resaveViewsWithChangedFields(e.App, e.Collection.Id)
+	*/
+	// PostgreSQL: a failed statement aborts the outer transaction (if any)
+	depViewsErr := runBestEffort(e.App, func(txApp App) error {
+		return resaveViewsWithChangedFields(txApp, e.Collection.Id)
+	})
 	if depViewsErr != nil {
 		e.App.Logger().Warn(
 			"Dependent view collection(s) may need to be updated after "+e.Collection.Name+" collection change",
@@ -1173,8 +1179,14 @@ func (c *Collection) fieldIndexName(field string) string {
 		name += security.PseudorandomStringWithAlphabet(10, DefaultIdAlphabet)
 	}
 
+	/* SQLite:
 	if len(name) > 64 {
 		return name[:64]
+	}
+	*/
+	// PostgreSQL:
+	if len(name) > maxIdentifierLength {
+		return name[:maxIdentifierLength]
 	}
 
 	return name

@@ -1,9 +1,10 @@
 package core
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/pocketbase/dbx"
 	validation "github.com/pocketbase/ozzo-validation/v4"
@@ -25,7 +26,11 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 	txErr := app.RunInTransaction(func(txApp App) error {
 		// create
 		// -----------------------------------------------------------
+		/* SQLite:
 		if oldCollection == nil || !app.HasTable(oldCollection.Name) {
+		*/
+		// PostgreSQL: quoted identifiers are case-sensitive
+		if oldCollection == nil || !hasExactTable(txApp.DB(), oldCollection.Name) {
 			tableName := newCollection.Name
 
 			fields := newCollection.Fields
@@ -52,7 +57,11 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 		oldFields := oldCollection.Fields
 		newFields := newCollection.Fields
 
+		/* SQLite:
 		needTableRename := !strings.EqualFold(oldTableName, newTableName)
+		*/
+		// PostgreSQL: quoted identifiers are case-sensitive
+		needTableRename := oldTableName != newTableName
 
 		var needIndexesUpdate bool
 		if needTableRename ||
@@ -99,7 +108,12 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 			// This way we are always doing 1 more rename operation but it provides better less ambiguous experience.
 
 			if oldField == nil {
+				/* SQLite:
 				tempName := field.GetName() + security.PseudorandomString(5)
+				*/
+				// PostgreSQL: don't derive from the field name because identifiers
+				// longer than 63 bytes are truncated (back to the actual name)
+				tempName := tempColumnName()
 				toRename[tempName] = field.GetName()
 
 				// add
@@ -108,7 +122,11 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 					return fmt.Errorf("failed to add column %s - %w", field.GetName(), err)
 				}
 			} else if oldField.GetName() != field.GetName() {
+				/* SQLite:
 				tempName := field.GetName() + security.PseudorandomString(5)
+				*/
+				// PostgreSQL: see the note above
+				tempName := tempColumnName()
 				toRename[tempName] = field.GetName()
 
 				// rename
@@ -125,6 +143,11 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 			if err != nil {
 				return err
 			}
+		}
+
+		// PostgreSQL:
+		if err := normalizeLegacyUUIDPrimaryKey(txApp, newCollection); err != nil {
+			return err
 		}
 
 		if err := normalizeSingleVsMultipleFieldChanges(txApp, newCollection, oldCollection); err != nil {
@@ -150,6 +173,78 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 	}
 	*/
 	// PostgreSQL: automatically handled by the database
+
+	return nil
+}
+
+// PostgreSQL:
+// tempColumnName returns a random temporary column name that doesn't depend on the
+// field name (identifiers longer than 63 bytes are truncated by PostgreSQL).
+func tempColumnName() string {
+	return "_pb_tmp_" + security.PseudorandomString(10)
+}
+
+// PostgreSQL:
+// normalizeLegacyUUIDPrimaryKey converts the UUID typed primary key column
+// (created by older versions for the <uuidv7> id pattern) to TEXT because
+// the relation fields store the referenced ids as TEXT and the join
+// expressions compare them directly (uuid = text doesn't exist).
+func normalizeLegacyUUIDPrimaryKey(txApp App, collection *Collection) error {
+	idField, ok := collection.Fields.GetByName(FieldNameId).(*TextField)
+	if !ok || idField == nil {
+		return nil
+	}
+
+	var dataType string
+	err := txApp.DB().NewQuery(`
+		SELECT data_type
+		FROM information_schema.columns
+		WHERE table_schema = current_schema()
+		  AND table_name = {:tableName}
+		  AND column_name = {:columnName}
+		LIMIT 1
+	`).Bind(dbx.Params{"tableName": collection.Name, "columnName": FieldNameId}).Row(&dataType)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+
+	if dataType != "uuid" {
+		return nil // already TEXT
+	}
+
+	// temporary drop all views because a column used by a view can't change its type
+	views, err := findAllViewsInDependencyOrder(txApp)
+	if err != nil {
+		return err
+	}
+	for i := len(views) - 1; i >= 0; i-- {
+		if err := txApp.DeleteView(views[i].Name); err != nil {
+			return err
+		}
+	}
+
+	_, err = txApp.DB().NewQuery(fmt.Sprintf(
+		"ALTER TABLE {{%s}} ALTER COLUMN [[%s]] DROP DEFAULT, ALTER COLUMN [[%s]] TYPE TEXT USING [[%s]]::text, ALTER COLUMN [[%s]] SET DEFAULT %s",
+		collection.Name,
+		FieldNameId,
+		FieldNameId,
+		FieldNameId,
+		FieldNameId,
+		idField.primaryKeyDefault(),
+	)).Execute()
+	if err != nil {
+		return fmt.Errorf("failed to convert the UUID primary key of %s to TEXT: %w", collection.Name, err)
+	}
+
+	// restore views
+	for _, view := range views {
+		if _, err := txApp.DB().NewQuery(view.SQL).Execute(); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -206,7 +301,11 @@ func normalizeSingleVsMultipleFieldChanges(app App, newCollection *Collection, o
 			}
 
 			originalName := newField.GetName()
+			/* SQLite:
 			oldTempName := "_" + newField.GetName() + security.PseudorandomString(5)
+			*/
+			// PostgreSQL: see tempColumnName
+			oldTempName := tempColumnName()
 
 			// rename temporary the original column to something else to allow inserting a new one in its place
 			_, err = txApp.DB().RenameColumn(newCollection.Name, originalName, oldTempName).Execute()

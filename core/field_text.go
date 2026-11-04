@@ -169,13 +169,23 @@ func (f *TextField) ColumnType(app App) string {
 		return "TEXT PRIMARY KEY DEFAULT ('r'||lower(hex(randomblob(7)))) NOT NULL"
 		*/
 		// PostgreSQL:
-		if f.Pattern == security.PredefinedAutoGeneratePattern_uuidv7 {
-			return "UUID PRIMARY KEY DEFAULT uuid_generate_v7() NOT NULL"
-		}
-		return "TEXT PRIMARY KEY DEFAULT ('r'||lower(hex(randomblob(7)))) NOT NULL"
+		// note: the id is always stored as TEXT (incl. for the <uuidv7> pattern)
+		// because the relation fields store the referenced ids as TEXT
+		// and the join expressions compare them directly
+		return "TEXT PRIMARY KEY DEFAULT " + f.primaryKeyDefault() + " NOT NULL"
 	}
 
 	return "TEXT DEFAULT '' NOT NULL"
+}
+
+// PostgreSQL:
+// primaryKeyDefault returns the primary key column default value expression.
+func (f *TextField) primaryKeyDefault() string {
+	if f.Pattern == security.PredefinedAutoGeneratePattern_uuidv7 {
+		return "(uuid_generate_v7()::text)"
+	}
+
+	return "('r'||lower(hex(randomblob(7))))"
 }
 
 // PrepareValue implements [Field.PrepareValue] interface method.
@@ -209,7 +219,10 @@ func (f *TextField) ValidateValue(ctx context.Context, app App, record *Record) 
 			// side-effects on some platforms check for duplicates in a case-insensitive manner
 			//
 			// (@todo eventually may get replaced in the future with a system unique constraint to avoid races or wrapping the request in a transaction)
-			if f.Pattern != defaultLowercaseRecordIdPattern {
+			if f.Pattern != defaultLowercaseRecordIdPattern &&
+				// PostgreSQL: the canonical uuid form is always lowercase
+				// (also avoids the unindexable COLLATE NOCASE scan)
+				f.Pattern != security.PredefinedAutoGeneratePattern_uuidv7 {
 				var exists int
 				err := app.ConcurrentDB().
 					Select("(1)").
@@ -261,7 +274,14 @@ func (f *TextField) ValidatePlainValue(value string) error {
 		switch f.Pattern {
 		case security.PredefinedAutoGeneratePattern_uuidv7:
 			// validate uuid v7 format
+			/* SQLite:
 			if _, err := uuid.Parse(value); err != nil {
+				return validation.NewError("validation_invalid_format", "Invalid UUID format")
+			}
+			*/
+			// PostgreSQL: allow only the canonical lowercase form
+			// (uuid.Parse also accepts uppercase, braces, urn prefix, etc.)
+			if u, err := uuid.Parse(value); err != nil || u.Version() != 7 || u.String() != value {
 				return validation.NewError("validation_invalid_format", "Invalid UUID format")
 			}
 		default:

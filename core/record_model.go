@@ -1466,7 +1466,16 @@ func onRecordSaveExecute(e *RecordEvent) error {
 			if e.Record.Collection().Id == collection.Id {
 				continue // skip current collection (sqlite will do the check for us)
 			}
+			/* SQLite:
 			record, _ := e.App.FindRecordById(collection, e.Record.Id)
+			*/
+			// PostgreSQL: a failed lookup must not abort the outer transaction (if any)
+			var record *Record
+			_ = runBestEffort(e.App, func(txApp App) error {
+				var findErr error
+				record, findErr = txApp.FindRecordById(collection, e.Record.Id)
+				return findErr
+			})
 			if record != nil {
 				return validation.Errors{
 					FieldNameId: validation.NewError("validation_invalid_auth_id", "Invalid or duplicated auth record id."),

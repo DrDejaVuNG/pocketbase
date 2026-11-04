@@ -3,11 +3,13 @@ package core_test
 import (
 	"bytes"
 	"encoding/json/v2"
+	"strings"
 	"testing"
 
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tests"
+	"github.com/pocketbase/pocketbase/tools/dbutils"
 	"github.com/pocketbase/pocketbase/tools/list"
 	"github.com/pocketbase/pocketbase/tools/types"
 )
@@ -112,6 +114,132 @@ func TestSyncRecordTableSchema(t *testing.T) {
 				t.Fatalf("Expected %d indexes, got %d:\n%v", s.expectedIndexesCount, totalIndexes, indexes)
 			}
 		})
+	}
+}
+
+// PostgreSQL: quoted identifiers are case-sensitive so a case-only
+// collection rename must also rename the records table.
+func TestSyncRecordTableSchemaCaseOnlyRename(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	baseCol := core.NewBaseCollection("rvcase")
+	baseCol.Fields.Add(&core.TextField{Name: "title"})
+	baseCol.AddIndex("idx_rvcase_title", false, "title", "")
+
+	authCol := core.NewAuthCollection("rvauthcase")
+
+	for _, col := range []*core.Collection{baseCol, authCol} {
+		t.Run(col.Name, func(t *testing.T) {
+			if err := app.Save(col); err != nil {
+				t.Fatal(err)
+			}
+
+			newName := strings.ToUpper(col.Name[:1]) + col.Name[1:]
+			col.Name = newName
+			if err := app.Save(col); err != nil {
+				t.Fatalf("Failed to rename the collection: %v", err)
+			}
+
+			var exactTables int
+			err := app.DB().NewQuery(`
+				SELECT count(*) FROM information_schema.tables
+				WHERE table_schema = current_schema() AND table_name = {:name}
+			`).Bind(dbx.Params{"name": newName}).Row(&exactTables)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if exactTables != 1 {
+				t.Fatalf("Expected table %q to exist", newName)
+			}
+
+			record := core.NewRecord(col)
+			if col.IsAuth() {
+				record.SetEmail("case@example.com")
+				record.SetPassword("1234567890")
+			} else {
+				record.Set("title", "test")
+			}
+			if err := app.Save(record); err != nil {
+				t.Fatalf("Failed to create record: %v", err)
+			}
+
+			if _, err := app.FindRecordById(newName, record.Id); err != nil {
+				t.Fatalf("Failed to find record: %v", err)
+			}
+
+			col.Fields.Add(&core.TextField{Name: "extra"})
+			if err := app.Save(col); err != nil {
+				t.Fatalf("Failed to add a new field: %v", err)
+			}
+		})
+	}
+}
+
+// PostgreSQL: identifiers longer than 63 bytes are silently truncated.
+func TestSyncRecordTableSchemaMaxLengthIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	longName := strings.Repeat("c", 63)
+	longField := strings.Repeat("f", 63)
+
+	// auth collection with max length name (the default auth index names are derived from it)
+	authCol := core.NewAuthCollection(longName)
+	if err := app.Save(authCol); err != nil {
+		t.Fatalf("Failed to create collection: %v", err)
+	}
+
+	record := core.NewRecord(authCol)
+	record.SetEmail("long@example.com")
+	record.SetPassword("1234567890")
+	if err := app.Save(record); err != nil {
+		t.Fatalf("Failed to create record: %v", err)
+	}
+
+	// add a max length field to the existing collection
+	authCol.Fields.Add(&core.TextField{Name: longField})
+	if err := app.Save(authCol); err != nil {
+		t.Fatalf("Failed to add a new field: %v", err)
+	}
+
+	record, err := app.FindRecordById(longName, record.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Set(longField, "secret-value")
+	if err := app.Save(record); err != nil {
+		t.Fatal(err)
+	}
+
+	// rename an existing field to a max length name
+	renamed := strings.Repeat("r", 63)
+	authCol.Fields.GetByName(longField).SetName(renamed)
+	if err := app.Save(authCol); err != nil {
+		t.Fatalf("Failed to rename the field: %v", err)
+	}
+
+	record, err = app.FindRecordById(longName, record.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := record.GetString(renamed); v != "secret-value" {
+		t.Fatalf("Expected %q, got %q", "secret-value", v)
+	}
+
+	indexes, err := app.TableIndexes(longName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, idx := range authCol.Indexes {
+		name := dbutils.ParseIndex(idx).IndexName
+		if _, ok := indexes[name]; !ok {
+			t.Fatalf("Missing index %q in %v", name, indexes)
+		}
 	}
 }
 

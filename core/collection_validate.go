@@ -75,7 +75,15 @@ func (validator *collectionValidator) run() error {
 
 	// generate fields from the query (overwriting any explicit user defined fields)
 	if validator.new.IsView() {
+		/* SQLite:
 		validator.new.Fields, _ = validator.app.CreateViewFields(validator.new.ViewQuery)
+		*/
+		// PostgreSQL: an invalid query must not abort the outer transaction (if any)
+		_ = runBestEffort(validator.app, func(txApp App) error {
+			var err error
+			validator.new.Fields, err = txApp.CreateViewFields(validator.new.ViewQuery)
+			return err
+		})
 	}
 
 	// validate base fields
@@ -109,7 +117,11 @@ func (validator *collectionValidator) run() error {
 		validation.Field(
 			&validator.new.Name,
 			validation.Required,
+			/* SQLite:
 			validation.Length(1, 255),
+			*/
+			// PostgreSQL: longer identifiers are silently truncated
+			validation.Length(1, maxIdentifierLength),
 			validation.By(checkForVia),
 			validation.Match(collectionNameRegex),
 			validation.By(validator.ensureNoSystemNameChange),
@@ -547,6 +559,16 @@ func (cv *collectionValidator) checkIndexes(value any) error {
 					"validation_invalid_index_expression",
 					"Invalid CREATE INDEX expression.",
 				),
+			}
+		}
+
+		// PostgreSQL: longer identifiers are silently truncated
+		if len(parsed.IndexName) > maxIdentifierLength {
+			return validation.Errors{
+				strconv.Itoa(i): validation.NewError(
+					"validation_index_name_too_long",
+					"The index name must be at most {{.max}} bytes.",
+				).SetParams(map[string]any{"max": maxIdentifierLength}),
 			}
 		}
 

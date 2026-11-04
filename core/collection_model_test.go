@@ -1781,3 +1781,68 @@ func TestCollectionSaveIndexesTableNameNormalization(t *testing.T) {
 		}
 	}
 }
+
+// PostgreSQL: a failed best-effort statement (dependent views resave, view fields
+// validation) must not abort the outer transaction, e.g. when a migration renames a
+// field used by a view and then updates the view query.
+func TestCollectionSaveBestEffortStatementsInTransaction(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	src := core.NewBaseCollection("rvsrc")
+	src.Fields.Add(&core.TextField{Name: "title"})
+	if err := app.Save(src); err != nil {
+		t.Fatal(err)
+	}
+
+	view := core.NewViewCollection("rvview")
+	view.ViewQuery = "select id, title from rvsrc"
+	if err := app.Save(view); err != nil {
+		t.Fatal(err)
+	}
+
+	txErr := app.RunInTransaction(func(txApp core.App) error {
+		// "migration 1": rename the field used by the view
+		// (the view resave with the old query fails and should be only logged)
+		txSrc, err := txApp.FindCollectionByNameOrId("rvsrc")
+		if err != nil {
+			return err
+		}
+		txSrc.Fields.GetByName("title").SetName("name")
+		if err := txApp.Save(txSrc); err != nil {
+			return fmt.Errorf("src save: %w", err)
+		}
+
+		// invalid view query validation (should only report a validation error)
+		invalidView := core.NewViewCollection("rvview_invalid")
+		invalidView.ViewQuery = "select id, missing from rvsrc"
+		if err := txApp.Validate(invalidView); err == nil {
+			return errors.New("expected invalid view validation error")
+		}
+
+		// "migration 2": update the view
+		txView, err := txApp.FindCollectionByNameOrId("rvview")
+		if err != nil {
+			return fmt.Errorf("view find: %w", err)
+		}
+		txView.ViewQuery = "select id, name from rvsrc"
+		if err := txApp.Save(txView); err != nil {
+			return fmt.Errorf("view save: %w", err)
+		}
+
+		return nil
+	})
+	if txErr != nil {
+		t.Fatal(txErr)
+	}
+
+	view, err := app.FindCollectionByNameOrId("rvview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Fields.GetByName("name") == nil {
+		t.Fatalf("Expected the view to have field name, got %v", view.Fields.FieldNames())
+	}
+}

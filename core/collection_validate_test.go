@@ -1,6 +1,7 @@
 package core_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -243,6 +244,22 @@ func TestCollectionValidate(t *testing.T) {
 			expectedErrors: []string{"name"},
 		},
 		{
+			name: "name longer than 63 bytes (PostgreSQL identifier limit)",
+			collection: func(app core.App) (*core.Collection, error) {
+				c := core.NewBaseCollection(strings.Repeat("a", 64))
+				return c, nil
+			},
+			expectedErrors: []string{"name"},
+		},
+		{
+			name: "name with 63 bytes",
+			collection: func(app core.App) (*core.Collection, error) {
+				c := core.NewBaseCollection(strings.Repeat("a", 63))
+				return c, nil
+			},
+			expectedErrors: []string{},
+		},
+		{
 			name: "name with _via_",
 			collection: func(app core.App) (*core.Collection, error) {
 				c := core.NewBaseCollection("a_via_b")
@@ -417,6 +434,17 @@ func TestCollectionValidate(t *testing.T) {
 				c.Indexes = []string{
 					"create index `idx_test_demo1` on demo1 (id)",
 					"create index `__pb_USERS_auth__username_idx` on anything (text)", // should be case-insensitive
+				}
+				return c, nil
+			},
+			expectedErrors: []string{"indexes"},
+		},
+		{
+			name: "index name longer than 63 bytes (PostgreSQL identifier limit)",
+			collection: func(app core.App) (*core.Collection, error) {
+				c, _ := app.FindCollectionByNameOrId("demo1")
+				c.Indexes = []string{
+					"create index idx_" + strings.Repeat("a", 60) + " on demo1 (text)",
 				}
 				return c, nil
 			},
