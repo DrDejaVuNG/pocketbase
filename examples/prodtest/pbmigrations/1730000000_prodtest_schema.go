@@ -77,6 +77,9 @@ func init() {
 			&core.TextField{Name: "body", Required: true},
 			&core.AutodateField{Name: "created", OnCreate: true},
 		)
+		// relation fields referenced by a cascade delete (or unset on delete) need an
+		// index: every posts delete looks up the referencing comments in its transaction
+		comments.AddIndex("idx_comments_post", false, "post", "")
 		if err := app.Save(comments); err != nil {
 			return err
 		}

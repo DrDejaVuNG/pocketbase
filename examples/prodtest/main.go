@@ -9,6 +9,8 @@ package main
 
 import (
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 
 	"github.com/pocketbase/pocketbase"
@@ -18,6 +20,13 @@ import (
 )
 
 func main() {
+	// optional profiling endpoint for load scenarios (never expose it publicly)
+	if addr := os.Getenv("PRODTEST_PPROF_ADDR"); addr != "" {
+		go func() {
+			log.Println("pprof:", http.ListenAndServe(addr, nil))
+		}()
+	}
+
 	app := pocketbase.New()
 
 	bindMailCapture(app)

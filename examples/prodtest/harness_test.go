@@ -56,11 +56,15 @@ func runSuite(m *testing.M) (int, error) {
 		return 1, err
 	}
 
-	binPath = filepath.Join(workDir, "prodtest")
-	build := exec.Command("go", "build", "-o", binPath, ".")
-	build.Stdout, build.Stderr = os.Stderr, os.Stderr
-	if err := build.Run(); err != nil {
-		return 1, fmt.Errorf("build backend: %w", err)
+	// PRODTEST_BIN runs the scenarios against a prebuilt backend binary
+	// (e.g. to compare two builds of the fork under the same load)
+	if binPath = os.Getenv("PRODTEST_BIN"); binPath == "" {
+		binPath = filepath.Join(workDir, "prodtest")
+		build := exec.Command("go", "build", "-o", binPath, ".")
+		build.Stdout, build.Stderr = os.Stderr, os.Stderr
+		if err := build.Run(); err != nil {
+			return 1, fmt.Errorf("build backend: %w", err)
+		}
 	}
 
 	pg, err = startPostgres()
@@ -72,6 +76,11 @@ func runSuite(m *testing.M) (int, error) {
 
 	if sharedFixture != nil && sharedFixture.c != nil {
 		sharedFixture.c.shutdown()
+	}
+	if pg.container != "" {
+		if out, err := exec.Command("docker", "logs", pg.container).CombinedOutput(); err == nil {
+			os.WriteFile(filepath.Join(workDir, "postgres.log"), out, 0o644)
+		}
 	}
 	pg.close()
 
@@ -129,17 +138,26 @@ func startPostgres() (*pgServer, error) {
 	adminPass := randHex(16)
 	appPass := randHex(16)
 
-	out, err := exec.Command("docker", "run", "-d", "--rm",
+	args := []string{"run", "-d", "--rm",
 		"--name", p.container,
 		"-e", "POSTGRES_USER=prodtest",
-		"-e", "POSTGRES_PASSWORD="+adminPass,
-		"-p", p.host+":5432",
+		"-e", "POSTGRES_PASSWORD=" + adminPass,
+		"-p", p.host + ":5432",
 		image,
 		"-c", "max_connections=400",
-		"-c", "fsync=off",
-		"-c", "synchronous_commit=off",
-		"-c", "full_page_writes=off",
-	).CombinedOutput()
+		"-c", "shared_preload_libraries=pg_stat_statements",
+	}
+	// PRODTEST_POSTGRES_DURABLE keeps the production default WAL durability
+	// (commits wait for the WAL flush); needed for realistic write throughput
+	if os.Getenv("PRODTEST_POSTGRES_DURABLE") == "" {
+		args = append(args,
+			"-c", "fsync=off",
+			"-c", "synchronous_commit=off",
+			"-c", "full_page_writes=off",
+		)
+	}
+
+	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("docker run: %w: %s", err, out)
 	}
@@ -166,6 +184,12 @@ func startPostgres() (*pgServer, error) {
 
 	// the nodes use a regular (non-superuser) role, like on managed Postgres
 	if err := p.exec("postgres", fmt.Sprintf(`CREATE ROLE %s LOGIN CREATEDB PASSWORD '%s'`, p.appRole, appPass)); err != nil {
+		p.close()
+		return nil, err
+	}
+
+	// statement statistics for load scenarios (pg_stat_statements view in the "postgres" db)
+	if err := p.exec("postgres", `CREATE EXTENSION IF NOT EXISTS pg_stat_statements`); err != nil {
 		p.close()
 		return nil, err
 	}

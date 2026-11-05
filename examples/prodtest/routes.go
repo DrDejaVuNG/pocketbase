@@ -1,9 +1,11 @@
 package main
 
 import (
+	"database/sql"
 	"errors"
 	"net/http"
 
+	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 )
@@ -49,6 +51,18 @@ func bindRoutes(se *core.ServeEvent, nodeName string) {
 
 	g := se.Router.Group("/api/prodtest")
 	g.Bind(apis.RequireSuperuserAuth())
+
+	// connection pool statistics of this node (pool sizing and starvation)
+	g.GET("/dbstats", func(e *core.RequestEvent) error {
+		stats := map[string]sql.DBStats{}
+		if db, ok := e.App.NonconcurrentDB().(*dbx.DB); ok {
+			stats["data"] = db.DB().Stats()
+		}
+		if db, ok := e.App.AuxNonconcurrentDB().(*dbx.DB); ok {
+			stats["aux"] = db.DB().Stats()
+		}
+		return e.JSON(http.StatusOK, stats)
+	})
 
 	// Read-modify-write inside RunInTransaction: the idiomatic PocketBase
 	// pattern that SQLite serializes through its single writer connection.
