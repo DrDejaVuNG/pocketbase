@@ -91,6 +91,7 @@ See: [pocketbase/pocketbase](https://github.com/pocketbase/pocketbase)
 - Realtime bridge messages changed format on 2026-11-04; during a rolling upgrade from an older build, realtime events between old and new nodes are not delivered.
 - Transactions (record deletes, batch requests, `RunInTransaction`) are serialized across all nodes while `PB_TX_SERIALIZE` is on (the default), similar to SQLite's single writer. Keep them short: a 3-node test cluster handled about 250-700 transactions per second in total.
 - Add an index to relation fields that other records reference with cascade delete (or that are unset on delete): each delete looks up the referencing records inside its serialized transaction.
+- Record creates and updates lock the related records they reference (`FOR KEY SHARE`, like a foreign key check) until they commit, so a concurrent delete of a related record can't leave a dangling relation: the delete waits, or the write fails with the relation validation error (400). `SaveNoValidate` writes are not checked.
 - Multi-node production scenarios: see `examples/prodtest/README.md`.
 
 **Disclaimer**

@@ -318,6 +318,11 @@ func (app *BaseApp) create(ctx context.Context, model Model, withValidations boo
 						return errors.New("empty primary key is not allowed when using the DBExporter interface")
 					}
 
+					// PostgreSQL: lock and recheck the validated relations in the write itself
+					if withValidations {
+						guardRelationValues(e.App, e.Model, data)
+					}
+
 					_, err = db.Insert(e.Model.TableName(), data).WithContext(e.Context).Execute()
 
 					return err
@@ -326,7 +331,7 @@ func (app *BaseApp) create(ctx context.Context, model Model, withValidations boo
 				return db.Model(e.Model).WithContext(e.Context).Insert()
 			}, defaultMaxLockRetries)
 			if dbErr != nil {
-				return dbErr
+				return relationGuardError(e.Model, dbErr)
 			}
 
 			e.Model.MarkAsNotNew()
@@ -397,7 +402,7 @@ func (app *BaseApp) update(ctx context.Context, model Model, withValidations boo
 				db = e.App.NonconcurrentDB()
 			}
 
-			return baseLockRetry(func(attempt int) error {
+			dbErr := baseLockRetry(func(attempt int) error {
 				if m, ok := e.Model.(DBExporter); ok {
 					data, err := m.DBExport(e.App)
 					if err != nil {
@@ -409,6 +414,11 @@ func (app *BaseApp) update(ctx context.Context, model Model, withValidations boo
 						return errors.New("primary key change is not allowed")
 					}
 
+					// PostgreSQL: lock and recheck the validated relations in the write itself
+					if withValidations {
+						guardRelationValues(e.App, e.Model, data)
+					}
+
 					_, err = db.Update(e.Model.TableName(), data, dbx.HashExp{
 						idColumn: e.Model.LastSavedPK(),
 					}).WithContext(e.Context).Execute()
@@ -418,6 +428,8 @@ func (app *BaseApp) update(ctx context.Context, model Model, withValidations boo
 
 				return db.Model(e.Model).WithContext(e.Context).Update()
 			}, defaultMaxLockRetries)
+
+			return relationGuardError(e.Model, dbErr)
 		})
 	})
 	if saveErr != nil {
