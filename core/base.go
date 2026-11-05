@@ -47,13 +47,16 @@ const (
 	// (100 - 3 = 97 connections for regular roles). Note that the data pool
 	// also provides the 2 LISTEN connections of the realtime bridge and,
 	// while migrating, the migrations lock connection.
+	// The idle sizes are the same as the open ones: with fewer idle connections
+	// database/sql closes the extra connections as soon as they are released and
+	// under load each request opens a new PostgreSQL connection (backend process).
 	// The sizes could be changed with the PB_DATA_MAX_OPEN_CONNS,
 	// PB_DATA_MAX_IDLE_CONNS, PB_AUX_MAX_OPEN_CONNS and PB_AUX_MAX_IDLE_CONNS
 	// env variables (or the related pocketbase.Config fields and flags).
 	DefaultDataMaxOpenConns int           = 20
-	DefaultDataMaxIdleConns int           = 5
+	DefaultDataMaxIdleConns int           = 20
 	DefaultAuxMaxOpenConns  int           = 4
-	DefaultAuxMaxIdleConns  int           = 2
+	DefaultAuxMaxIdleConns  int           = 4
 	DefaultQueryTimeout     time.Duration = 30 * time.Second
 
 	LocalStorageDirName       string = "storage"
