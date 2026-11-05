@@ -30,9 +30,13 @@ func DefaultDBConnect(dbPath string) (*dbx.DB, error) {
 
 // Sample Connection String: "postgres://<username>:<password>@127.0.0.1:<port>"
 //
-// An invalid connection string doesn't panic but results in a DBConnectFunc
+// An empty or invalid connection string doesn't panic but results in a DBConnectFunc
 // that returns the validation error (without the connection string credentials).
 func PostgresDBConnectFunc(connectionString string) DBConnectFunc {
+	if connectionString == "" {
+		return failedDBConnect(errors.New("missing Postgres connection string: set the POSTGRES_URL env variable, the --postgresUrl flag or BaseAppConfig.PostgresURL"))
+	}
+
 	url, err := url.Parse(connectionString)
 	/* PostgreSQL (removed):
 	// panicked even for commands that don't connect (e.g. --help) and the

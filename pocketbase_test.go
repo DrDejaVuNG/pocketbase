@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"ganigeorgiev.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/tests"
 	"github.com/spf13/cobra"
 )
 
@@ -146,7 +147,7 @@ func TestSkipBootstrap(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	// already bootstrapped
-	app0 := NewWithConfig(Config{DefaultDataDir: tempDir})
+	app0 := NewWithConfig(Config{DefaultDataDir: tempDir, DefaultPostgresURL: tests.PostgresURL})
 	app0.Bootstrap()
 	if v := app0.skipBootstrap(); !v {
 		t.Fatal("[bootstrapped] Expected true, got false")
@@ -303,4 +304,19 @@ func TestPostgresURLCredentialsNotLeaked(t *testing.T) {
 			t.Fatalf("The error contains the connection string password: %v", err)
 		}
 	})
+}
+
+func TestPostgresURLRequired(t *testing.T) {
+	withArgs(t)
+	t.Setenv("POSTGRES_URL", "")
+
+	app := NewWithConfig(Config{DefaultDataDir: t.TempDir()})
+
+	err := app.Bootstrap()
+	if err == nil {
+		t.Fatal("Expected Bootstrap error without a Postgres connection string")
+	}
+	if !strings.Contains(err.Error(), "POSTGRES_URL") {
+		t.Fatalf("Expected the error to name POSTGRES_URL, got %v", err)
+	}
 }

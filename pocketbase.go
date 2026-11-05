@@ -62,7 +62,7 @@ type Config struct {
 	// optional default values for the console flags
 	DefaultDev            bool
 	DefaultDataDir        string // if not set, it will fallback to "./pb_data"
-	DefaultPostgresURL    string // if not set, it will fallback to "postgres://user:pass@127.0.0.1:5432/postgres?sslmode=disable"
+	DefaultPostgresURL    string // if not set, it will fallback to the POSTGRES_URL env variable (required, no default)
 	DefaultPostgresDataDb string // if not set, it will fallback to "pb-data"
 	DefaultPostgresAuxDb  string // if not set, it will fallback to "pb-auxiliary"
 	DefaultRealtimeBridge *bool  // if not set, it will fallback to the `true`
@@ -111,9 +111,7 @@ func NewWithConfig(config Config) *PocketBase {
 		}
 	}
 	if config.DefaultPostgresURL == "" {
-		if config.DefaultPostgresURL = os.Getenv("POSTGRES_URL"); config.DefaultPostgresURL == "" {
-			config.DefaultPostgresURL = "postgres://user:pass@127.0.0.1:5432/postgres?sslmode=disable"
-		}
+		config.DefaultPostgresURL = os.Getenv("POSTGRES_URL")
 	}
 	if config.DefaultPostgresDataDb == "" {
 		if config.DefaultPostgresDataDb = os.Getenv("POSTGRES_DATA_DB"); config.DefaultPostgresDataDb == "" {
@@ -287,7 +285,7 @@ func (pb *PocketBase) eagerParseFlags(config *Config) error {
 		&pb.postgresUrlFlag,
 		"postgresUrl",
 		"",
-		"the Postgres connection string (if not set, it will fallback to the POSTGRES_URL env variable)",
+		"the Postgres connection string (required; if not set, it will fallback to the POSTGRES_URL env variable)",
 	)
 
 	pb.RootCmd.PersistentFlags().StringVar(

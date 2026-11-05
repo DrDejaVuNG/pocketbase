@@ -9,6 +9,7 @@ import (
 
 	"ganigeorgiev.com/pocketbase/dbx"
 	"ganigeorgiev.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/tests"
 	"ganigeorgiev.com/pocketbase/pocketbase/tools/store"
 	"golang.org/x/sync/semaphore"
 )
@@ -25,14 +26,16 @@ func TestNotifyWatcher_SettingsUpdate(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	app1 := core.NewBaseApp(core.BaseAppConfig{
-		DataDir: tmpDir,
+		DataDir:     tmpDir,
+		PostgresURL: tests.PostgresURL,
 	})
 	if err := app1.Bootstrap(); err != nil {
 		t.Fatal(err)
 	}
 
 	app2 := core.NewBaseApp(core.BaseAppConfig{
-		DataDir: tmpDir,
+		DataDir:     tmpDir,
+		PostgresURL: tests.PostgresURL,
 	})
 	if err := app2.Bootstrap(); err != nil {
 		t.Fatal(err)
@@ -97,14 +100,16 @@ func TestNotifyWatcher_CollectionsUpdate(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	app1 := core.NewBaseApp(core.BaseAppConfig{
-		DataDir: tmpDir,
+		DataDir:     tmpDir,
+		PostgresURL: tests.PostgresURL,
 	})
 	if err := app1.Bootstrap(); err != nil {
 		t.Fatal(err)
 	}
 
 	app2 := core.NewBaseApp(core.BaseAppConfig{
-		DataDir: tmpDir,
+		DataDir:     tmpDir,
+		PostgresURL: tests.PostgresURL,
 	})
 	if err := app2.Bootstrap(); err != nil {
 		t.Fatal(err)

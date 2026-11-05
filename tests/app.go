@@ -89,19 +89,25 @@ func NewTestApp(optTestDataDir ...string) (*TestApp, error) {
 		testDataDir = optTestDataDir[0]
 	}
 
-	// docker run -d --rm --name postgres -e POSTGRES_USER=user -e POSTGRES_PASSWORD=pass -p 5432:5432 postgres:alpine
 	return NewTestAppWithConfig(core.BaseAppConfig{
 		DataDir:       testDataDir,
 		EncryptionEnv: "pb_test_env",
-		PostgresURL:   "postgres://user:pass@127.0.0.1:5432/postgres?sslmode=disable",
+		PostgresURL:   PostgresURL,
 		// IsDev:         true, // Turn it on in unit tests to see sql erros.
 	})
 }
+
+// PostgresURL is the PostgreSQL server of the test suite
+// (the CI service container or a local one started with:
+// docker run -d --rm --name postgres -e POSTGRES_USER=user -e POSTGRES_PASSWORD=pass -p 5432:5432 postgres:alpine).
+const PostgresURL = "postgres://user:pass@127.0.0.1:5432/postgres?sslmode=disable"
 
 // NewTestAppWithConfig creates and initializes a test application instance
 // from the provided config.
 //
 // If config.DataDir is not set it fallbacks to the default internal test data directory.
+// If config.PostgresURL is not set it fallbacks to [PostgresURL]
+// (the test databases are always copied to that server).
 //
 // config.DataDir is cloned for each new test application instance.
 //
@@ -111,6 +117,10 @@ func NewTestAppWithConfig(config core.BaseAppConfig) (*TestApp, error) {
 		// fallback to the default test data directory
 		_, currentFile, _, _ := runtime.Caller(0)
 		config.DataDir = filepath.Join(path.Dir(currentFile), "data")
+	}
+
+	if config.PostgresURL == "" {
+		config.PostgresURL = PostgresURL
 	}
 
 	tempDir, err := TempDirClone(config.DataDir)

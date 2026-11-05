@@ -77,7 +77,7 @@ Upgrade from `v0.40.x-pg`: in your `.go` files change `github.com/pocketbase/poc
 **Available Environment Variables**
 | Environment Variable | Description | Default |
 |---------------------|-------------|---------|
-| `POSTGRES_URL` | PostgresSQL connection URL (required) | required |
+| `POSTGRES_URL` | PostgresSQL connection URL (required: `serve` and the other commands fail at startup when it is not set; also `--postgresUrl`) | required |
 | `POSTGRES_DATA_DB` | Database name for the PocketBase data | `pb-data` |
 | `POSTGRES_AUX_DB` | Database name for the PocketBase logs data | `pb-auxiliary` |
 | `PB_DATA_DIR` | Directory to store the PocketBase data | `./pb_data` |
