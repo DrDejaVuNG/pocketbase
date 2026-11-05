@@ -42,6 +42,26 @@ type ResolverResult struct {
 	// AfterBuild is an optional function that will be called after building
 	// and combining the result of both resolved operands/sides in a single expression.
 	AfterBuild func(expr dbx.Expression) dbx.Expression
+
+	// PostgreSQL only:
+	// ColumnType is the optional type ("text", "numeric" or "boolean")
+	// of a plain column Identifier.
+	//
+	// Two column operands with the same ColumnType are compared directly
+	// instead of through the type erasing (and not indexable) to_jsonb().
+	ColumnType string
+
+	// PostgreSQL only:
+	// NotNull indicates that the plain column Identifier is never NULL
+	// (a NOT NULL column of a row that is always present in the query,
+	// eg. the main table or the request auth record join).
+	//
+	// It allows writing a column equality with an index friendly "="
+	// instead of "IS NOT DISTINCT FROM". A wrong NotNull only makes the
+	// equality more strict (false instead of true when both values are NULL),
+	// that is why it must not be copied to negated expressions
+	// (eg. the multi-match NOT EXISTS subquery).
+	NotNull bool
 }
 
 // FieldResolver defines an interface for managing search fields.

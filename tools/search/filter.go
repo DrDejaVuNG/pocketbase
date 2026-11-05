@@ -565,6 +565,10 @@ func resolveEqualExpr(equal bool, left, right *ResolverResult) dbx.Expression {
 	)
 	*/
 	// PostgreSQL:
+	if expr := sameTypeColumnsExpr(equal, left, right); expr != "" {
+		return dbx.NewExp(expr, mergeParams(left.Params, right.Params))
+	}
+
 	// 1. We can't use COALESCE() here, because we never know the type of the column to be compared.
 	//    Otherwise, PostgreSQL will throw a type mismatch error if we use default empty string.
 	// 2. to_jsonb() erase the type so that different types can be compared safely.
@@ -575,6 +579,44 @@ func resolveEqualExpr(equal bool, left, right *ResolverResult) dbx.Expression {
 		fmt.Sprintf("%s %s %s", castToJsonb(left), nullEqualOp, castToJsonb(right)),
 		mergeParams(left.Params, right.Params),
 	)
+}
+
+// PostgreSQL only:
+// sameTypeColumnsExpr compares two column operands with the same known
+// [ResolverResult.ColumnType] without the type erasing to_jsonb() wrapper.
+//
+// The result is the same as "a IS [NOT] DISTINCT FROM b", but when an operand
+// is known to be NOT NULL the equality is written with "=" so that PostgreSQL
+// could use an index or a hash join for it (IS NOT DISTINCT FROM is not indexable):
+//   - a and b NOT NULL: a = b
+//   - a NOT NULL:       (a = b AND b IS NOT NULL)
+//
+// Returns an empty string if the operand types are unknown or different.
+func sameTypeColumnsExpr(equal bool, left, right *ResolverResult) string {
+	if left.ColumnType == "" || left.ColumnType != right.ColumnType {
+		return ""
+	}
+
+	l := left.Identifier
+	r := right.Identifier
+
+	if !equal {
+		if left.NotNull && right.NotNull {
+			return l + " <> " + r
+		}
+		return l + " IS DISTINCT FROM " + r
+	}
+
+	switch {
+	case left.NotNull && right.NotNull:
+		return l + " = " + r
+	case left.NotNull:
+		return "(" + l + " = " + r + " AND " + r + " IS NOT NULL)"
+	case right.NotNull:
+		return "(" + l + " = " + r + " AND " + l + " IS NOT NULL)"
+	default:
+		return l + " IS NOT DISTINCT FROM " + r
+	}
 }
 
 // PostgreSQL only:
@@ -904,6 +946,9 @@ var regexPlainPlaceholder = regexp.MustCompile(`^\{:\w+\}$`)
 func withResolverIdentifier(result *ResolverResult, identifier string) *ResolverResult {
 	clone := *result
 	clone.Identifier = identifier
+	// the type hints describe only the original plain column identifier
+	clone.ColumnType = ""
+	clone.NotNull = false
 	return &clone
 }
 

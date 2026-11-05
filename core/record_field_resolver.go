@@ -55,6 +55,7 @@ type RecordFieldResolver struct {
 	staticRequestInfo map[string]any
 	allowedFields     []string
 	joins             []*search.Join
+	toOneJoins        map[string]struct{} // PostgreSQL only: aliases of the joins that match at most one row
 	allowHiddenFields bool
 	// ---
 	listRuleJoins       []ruleJoin
@@ -139,39 +140,68 @@ func (r *RecordFieldResolver) UpdateQuery(query *dbx.SelectQuery) error {
 	// it needs to know all join aliases (see updateQueryWithDeduplicateConstraint)
 	joinAliases := make([]string, 0, len(r.joins))
 
+	// PostgreSQL: whether some of the joins could match more than one row
+	// (aka. could duplicate the main query rows)
+	multiRowJoins := false
+
 	for _, join := range r.joins {
 		query.LeftJoin(
 			(join.TableName + " " + join.TableAlias),
 			join.On,
 		)
 		joinAliases = append(joinAliases, join.TableAlias)
+		if _, ok := r.toOneJoins[join.TableAlias]; !ok {
+			multiRowJoins = true
+		}
 	}
 
 	// note: for now the joins are not applied for multi-match conditions to avoid excessive checks
 	for _, join := range r.listRuleJoins {
-		ruleJoinAliases, err := r.updateQueryWithCollectionListRule(join.collection, join.tableAlias, query)
+		ruleJoinAliases, ruleMultiRowJoins, err := r.updateQueryWithCollectionListRule(join.collection, join.tableAlias, query)
 		if err != nil {
 			return err
 		}
 		joinAliases = append(joinAliases, ruleJoinAliases...)
+		multiRowJoins = multiRowJoins || ruleMultiRowJoins
 	}
 
-	if len(joinAliases) > 0 {
+	if multiRowJoins {
 		r.updateQueryWithDeduplicateConstraint(query, joinAliases)
+	} else if len(joinAliases) > 0 {
+		// PostgreSQL:
+		// the to-one joins can't duplicate the main query rows so the GROUP BY
+		// deduplication is skipped (it prevents PostgreSQL from stopping early
+		// with an ORDER BY index and LIMIT), only the joined columns are excluded
+		r.updateQueryWithBaseSelect(query)
 	}
 
 	return nil
 }
 
+// updateQueryWithBaseSelect excludes the joined tables columns
+// from a "SELECT *" query (aka. selects only the main table columns).
+func (r *RecordFieldResolver) updateQueryWithBaseSelect(query *dbx.SelectQuery) {
+	baseAlias := r.baseCollection.Name
+	if r.baseCollectionAlias != "" {
+		baseAlias = r.baseCollectionAlias
+	}
+
+	if selectAllType(query.Info().Selects, baseAlias) == selectAllJoined {
+		query.Select("{{" + baseAlias + "}}.*")
+	}
+}
+
 // updateQueryWithCollectionListRule applies the collection ListRule constraint
-// to the query and returns the aliases of the joins added by the rule (if any).
-func (r *RecordFieldResolver) updateQueryWithCollectionListRule(c *Collection, tableAlias string, query *dbx.SelectQuery) ([]string, error) {
+// to the query and returns the aliases of the joins added by the rule (if any)
+// and whether some of them could match more than one row.
+func (r *RecordFieldResolver) updateQueryWithCollectionListRule(c *Collection, tableAlias string, query *dbx.SelectQuery) ([]string, bool, error) {
 	if r.allowHiddenFields || c == nil || c.ListRule == nil || *c.ListRule == "" {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	cloneR := *r
 	cloneR.joins = []*search.Join{}
+	cloneR.toOneJoins = nil
 	cloneR.baseCollection = c
 	cloneR.baseCollectionAlias = tableAlias
 	cloneR.allowHiddenFields = true
@@ -189,7 +219,7 @@ func (r *RecordFieldResolver) updateQueryWithCollectionListRule(c *Collection, t
 	// even if for example "a.name != ''" is true.
 	expr, err := search.FilterData("id='' || (\n" + *c.ListRule + "\n)").BuildExpr(&cloneR)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build %q ListRule join subquery filter expression: %w", c.Name, err)
+		return nil, false, fmt.Errorf("failed to build %q ListRule join subquery filter expression: %w", c.Name, err)
 	}
 
 	// Bind the extra rule expression at the top query level for performance and security reasons
@@ -202,15 +232,19 @@ func (r *RecordFieldResolver) updateQueryWithCollectionListRule(c *Collection, t
 	query.AndWhere(expr)
 
 	joinAliases := make([]string, 0, len(cloneR.joins))
+	multiRowJoins := false
 	for _, j := range cloneR.joins {
 		query.LeftJoin(
 			(j.TableName + " " + j.TableAlias),
 			j.On,
 		)
 		joinAliases = append(joinAliases, j.TableAlias)
+		if _, ok := cloneR.toOneJoins[j.TableAlias]; !ok {
+			multiRowJoins = true
+		}
 	}
 
-	return joinAliases, nil
+	return joinAliases, multiRowJoins, nil
 }
 
 func (r *RecordFieldResolver) updateQueryWithDeduplicateConstraint(query *dbx.SelectQuery, joinAliases []string) {
@@ -640,6 +674,22 @@ func (r *RecordFieldResolver) registerJoin(tableName string, tableAlias string, 
 
 	// register new join
 	r.joins = append(r.joins, newJoin)
+	return nil
+}
+
+// registerToOneJoin registers a join that matches at most one row
+// for each row of the joined table (eg. a single relation by its id),
+// aka. a join that can't duplicate the main query rows.
+func (r *RecordFieldResolver) registerToOneJoin(tableName string, tableAlias string, on dbx.Expression) error {
+	if err := r.registerJoin(tableName, tableAlias, on); err != nil {
+		return err
+	}
+
+	if r.toOneJoins == nil {
+		r.toOneJoins = map[string]struct{}{}
+	}
+	r.toOneJoins[tableAlias] = struct{}{}
+
 	return nil
 }
 

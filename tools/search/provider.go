@@ -128,6 +128,11 @@ func (s *Provider) SkipTotal(skipTotal bool) *Provider {
 // CountCol allows changing the default column (id) that is used
 // to generate the COUNT SQL query statement.
 //
+// PostgreSQL: with "ctid" (the unique table row id) a plain COUNT(*) is used
+// when the query has no GROUP BY, DISTINCT or UNION, aka. when the joins
+// can't duplicate the main table rows (the RecordFieldResolver groups the
+// query when a join could match more than one row).
+//
 // This field is ignored if skipTotal is true.
 func (s *Provider) CountCol(name string) *Provider {
 	s.countCol = name
@@ -311,9 +316,18 @@ func (s *Provider) Exec(items any) (*Result, error) {
 		// when there is "Group By" different from the default deduplication one
 		// added by RecordFieldResolver.UpdateQuery
 
+		countExpr := "COUNT(DISTINCT [[" + countCol + "]])"
+
+		// PostgreSQL only:
+		// see CountCol (avoids sorting all matching ctids)
+		if s.countCol == "ctid" && len(queryInfo.From) == 1 && len(queryInfo.Union) == 0 &&
+			len(queryInfo.GroupBy) == 0 && !queryInfo.Distinct {
+			countExpr = "COUNT(*)"
+		}
+
 		// note: countQuery is shallow cloned and slice/map in-place modifications should be avoided
 		err := countQuery.Distinct(false).
-			Select("COUNT(DISTINCT [[" + countCol + "]])").
+			Select(countExpr).
 			GroupBy( /* reset */ ).
 			OrderBy( /* reset */ ).
 			Row(&totalCount)

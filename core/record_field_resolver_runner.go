@@ -56,6 +56,7 @@ type runner struct {
 	withMultiMatch             bool                       // indicates whether to attach a MultiMatchSubquery condition to the ResolverResult
 	multiMatchActiveTableAlias string                     // the last used multi-match table alias
 	multiMatch                 *search.MultiMatchSubquery // the multi-match subquery expression generated from the fieldName
+	baseTableAlias             string                     // PostgreSQL only: the main query table alias (its rows are always present)
 }
 
 func (r *runner) run() (*search.ResolverResult, error) {
@@ -138,6 +139,7 @@ func (r *runner) prepare() {
 	} else {
 		r.activeTableAlias = r.resolver.baseCollectionAlias
 	}
+	r.baseTableAlias = r.activeTableAlias
 
 	// enable the ignore flag for missing @request.* fields for backward
 	// compatibility and consistency with all @request.* filter fields and types
@@ -212,11 +214,28 @@ func (r *runner) processRequestAuthField() (*search.ResolverResult, error) {
 	// ---
 	collection := r.resolver.requestInfo.Auth.Collection()
 
+	// PostgreSQL only:
+	// a single value field of the auth record itself (eg. "@request.auth.org")
+	// is resolved from the already loaded request auth record as a query param
+	// (the same as the plain auth fields above) instead of joining the auth collection.
+	// With the join the compared value is unknown at planning time and PostgreSQL
+	// can't use an index on the other operand (eg. "org" in "org = @request.auth.org").
+	// Relation paths (eg. "@request.auth.org.name"), modifiers and multi-value,
+	// date or json fields are still resolved with the join.
+	if len(r.activeProps) == 3 {
+		if field := collection.Fields.GetByName(r.activeProps[2]); isStaticAuthField(field) {
+			if field.GetHidden() && !r.resolver.allowHiddenFields {
+				return nil, fmt.Errorf("non-filterable field %q", field.GetName())
+			}
+			return r.resolver.resolveStaticRequestField(r.activeProps[1:]...)
+		}
+	}
+
 	r.activeCollectionName = collection.Name
 	r.activeTableAlias = "__auth_" + inflector.Columnify(r.activeCollectionName) + r.resolver.joinAliasSuffix
 
 	// join the auth collection to the main query
-	err := r.resolver.registerJoin(
+	err := r.resolver.registerToOneJoin(
 		inflector.Columnify(r.activeCollectionName),
 		r.activeTableAlias,
 		dbx.HashExp{
@@ -246,6 +265,22 @@ func (r *runner) processRequestAuthField() (*search.ResolverResult, error) {
 	r.activeProps = r.activeProps[2:]
 
 	return r.processActiveProps()
+}
+
+// PostgreSQL only:
+// isStaticAuthField reports whether the auth record field could be resolved
+// from the request auth record (its exported value is the same as the db column value).
+func isStaticAuthField(field Field) bool {
+	switch f := field.(type) {
+	case *TextField, *EditorField, *EmailField, *URLField, *NumberField, *BoolField:
+		return true
+	case *SelectField:
+		return !f.IsMultiple()
+	case *RelationField:
+		return !f.IsMultiple()
+	default:
+		return false
+	}
 }
 
 // note: nil value is returned as empty slice
@@ -557,8 +592,15 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 
 			isBackRelMultiple := backRelField.IsMultiple()
 
+			// a single back relation field with a unique index matches at most one row
+			_, hasBackRelUniqueIndex := dbutils.FindSingleColumnUniqueIndex(backCollection.Indexes, backRelField.Name)
+
 			if !isBackRelMultiple {
-				err := r.resolver.registerJoin(
+				registerJoin := r.resolver.registerJoin
+				if hasBackRelUniqueIndex {
+					registerJoin = r.resolver.registerToOneJoin
+				}
+				err := registerJoin(
 					newCollectionName,
 					newTableAlias,
 					dbx.NewExp(fmt.Sprintf("[[%s.%s]] = [[%s.id]]", newTableAlias, cleanBackFieldName, r.activeTableAlias)),
@@ -595,8 +637,7 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 			} else if !r.withMultiMatch {
 				// additionally check if the rel field has a single column unique index;
 				// if not - apply a multi-match check
-				_, hasUniqueIndex := dbutils.FindSingleColumnUniqueIndex(backCollection.Indexes, backRelField.Name)
-				r.withMultiMatch = !hasUniqueIndex
+				r.withMultiMatch = !hasBackRelUniqueIndex
 			}
 
 			newTableAlias2 := r.multiMatchActiveTableAlias + "_" + cleanProp + r.resolver.joinAliasSuffix
@@ -666,7 +707,7 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 		newCollectionName := relCollection.Name
 
 		if !relField.IsMultiple() {
-			err := r.resolver.registerJoin(
+			err := r.resolver.registerToOneJoin(
 				inflector.Columnify(newCollectionName),
 				newTableAlias,
 				dbx.NewExp(fmt.Sprintf("[[%s.id]] = [[%s]]", newTableAlias, prefixedFieldName)),
@@ -846,6 +887,17 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 	}
 
 	// PostgreSQL only:
+	// type hints for comparisons with other columns (see search.ResolverResult.ColumnType)
+	//
+	// note: the main table rows are always present (the joined ones could be missing);
+	// for the joined collection ListRule constraint the "main" table is a join but there
+	// a missing row is matched by the extra "id=''" check (see updateQueryWithCollectionListRule)
+	if modifier == "" && !collection.IsView() {
+		result.ColumnType, result.NotNull = columnTypeHint(field.ColumnType(r.resolver.app))
+		result.NotNull = result.NotNull && r.activeTableAlias == r.baseTableAlias
+	}
+
+	// PostgreSQL only:
 	// multi-value fields are stored as JSONB arrays and comparing them directly with
 	// an untyped string param (eg. "tags = 'a'") would try to parse the param as json.
 	// The explicit type allows the filter builder to normalize the other operand
@@ -871,4 +923,22 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 	}
 
 	return result, nil
+}
+
+// PostgreSQL only:
+// columnTypeHint returns the comparison type ("text", "numeric" or "boolean")
+// of a field column definition (eg. "NUMERIC DEFAULT 0 NOT NULL")
+// and whether the column is NOT NULL.
+//
+// An empty type is returned for the other column types (eg. jsonb, timestamp).
+func columnTypeHint(columnDefinition string) (string, bool) {
+	def := strings.ToUpper(strings.TrimSpace(columnDefinition))
+
+	typ, _, _ := strings.Cut(def, " ")
+	switch typ {
+	case "TEXT", "NUMERIC", "BOOLEAN":
+		return strings.ToLower(typ), strings.Contains(def, "NOT NULL") || strings.Contains(def, "PRIMARY KEY")
+	default:
+		return "", false
+	}
 }

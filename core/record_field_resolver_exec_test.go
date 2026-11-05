@@ -8,6 +8,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tests"
 	"github.com/pocketbase/pocketbase/tools/search"
+	"github.com/pocketbase/pocketbase/tools/security"
 	"github.com/pocketbase/pocketbase/tools/types"
 )
 
@@ -427,5 +428,117 @@ func TestRecordFieldResolverExecFixtureColumnTypes(t *testing.T) {
 		if types[col] != typ {
 			t.Errorf("Expected column %q to be %q, got %q", col, typ, types[col])
 		}
+	}
+}
+
+// "@request.auth.*" single value fields are resolved as query params and
+// columns of the same type are compared directly (PostgreSQL only); the
+// results must stay the same as with the auth join and to_jsonb() comparisons,
+// including the NULL values of missing relations.
+func TestRecordFieldResolverExecAuthFieldsAndColumnComparisons(t *testing.T) {
+	t.Parallel()
+
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Cleanup()
+
+	orgs := core.NewBaseCollection("ac_orgs")
+	orgs.Fields.Add(&core.TextField{Name: "name"})
+	if err := app.Save(orgs); err != nil {
+		t.Fatal(err)
+	}
+
+	members := core.NewAuthCollection("ac_members")
+	members.Fields.Add(
+		&core.RelationField{Name: "org", CollectionId: orgs.Id, MaxSelect: 1},
+		&core.TextField{Name: "secret", Hidden: true},
+	)
+	if err := app.Save(members); err != nil {
+		t.Fatal(err)
+	}
+
+	docs := core.NewBaseCollection("ac_docs")
+	docs.Fields.Add(
+		&core.TextField{Name: "title"},
+		&core.RelationField{Name: "org", CollectionId: orgs.Id, MaxSelect: 1},
+		&core.RelationField{Name: "owner", CollectionId: orgs.Id, MaxSelect: 1},
+	)
+	if err := app.Save(docs); err != nil {
+		t.Fatal(err)
+	}
+
+	newRecord := func(c *core.Collection, data map[string]any) *core.Record {
+		r := core.NewRecord(c)
+		r.Load(data)
+		if c.IsAuth() {
+			r.SetEmail(security.RandomString(10) + "@example.com")
+			r.SetPassword("1234567890")
+		}
+		if err := app.Save(r); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+
+	orgA := newRecord(orgs, map[string]any{"name": "a"})
+	orgB := newRecord(orgs, map[string]any{"name": "b"})
+	withOrg := newRecord(members, map[string]any{"org": orgA.Id, "secret": "s1"})
+	withoutOrg := newRecord(members, map[string]any{})
+	newRecord(docs, map[string]any{"title": "a", "org": orgA.Id, "owner": orgB.Id})
+	newRecord(docs, map[string]any{"title": "x", "org": orgB.Id, "owner": orgB.Id})
+	newRecord(docs, map[string]any{"title": "c"}) // missing org and owner (NULL joined columns)
+
+	scenarios := []struct {
+		name        string
+		auth        *core.Record
+		allowHidden bool
+		filter      string
+		expected    []string // nil = error
+	}{
+		{"auth relation", withOrg, true, "org = @request.auth.org", []string{"a"}},
+		{"empty auth relation", withoutOrg, true, "org = @request.auth.org", []string{"c"}},
+		{"auth relation path (join)", withOrg, true, "org.name = @request.auth.org.name", []string{"a"}},
+		{"hidden auth field in a rule", withOrg, true, "@request.auth.secret = 's1'", []string{"a", "c", "x"}},
+		{"hidden auth field in a client filter", withOrg, false, "@request.auth.secret = 's1'", nil},
+		{"joined columns", withOrg, true, "org.name = owner.name", []string{"c", "x"}},
+		{"joined columns (not equal)", withOrg, true, "org.name != owner.name", []string{"a"}},
+		{"main vs joined column", withOrg, true, "title = org.name", []string{"a"}},
+		{"main vs joined column (not equal)", withOrg, true, "title != org.name", []string{"c", "x"}},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			resolver := core.NewRecordFieldResolver(app, docs, &core.RequestInfo{Auth: s.auth}, s.allowHidden)
+
+			provider := search.NewProvider(resolver).
+				Query(app.RecordQuery(docs)).
+				CountCol("ctid").
+				AddFilter(search.FilterData(s.filter))
+
+			records := []*core.Record{}
+			result, err := provider.Exec(&records)
+			if s.expected == nil {
+				if err == nil {
+					t.Fatalf("Expected error, got %d records", len(records))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			titles := make([]string, 0, len(records))
+			for _, r := range records {
+				titles = append(titles, r.GetString("title"))
+			}
+			if got := sortedStrings(titles); !slices.Equal(got, s.expected) {
+				t.Fatalf("Expected %v, got %v", s.expected, got)
+			}
+			if result.TotalItems != len(s.expected) {
+				t.Fatalf("Expected total %d, got %d", len(s.expected), result.TotalItems)
+			}
+		})
 	}
 }
