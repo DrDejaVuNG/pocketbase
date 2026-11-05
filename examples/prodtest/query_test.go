@@ -36,13 +36,6 @@ type queryCase struct {
 	want   []string // expected titles (any order)
 }
 
-// knownGaps lists parity differences that are logged in docs/FOLLOW_UPS.md;
-// they are reported with t.Logf instead of failing the run.
-var knownGaps = map[string]string{
-	`publishedAt < '2024-01-01 00:00:00.000Z'`: "empty dates are NULL, not ''",
-	`sort=-publishedAt`:                        "empty dates are NULL, not ''",
-}
-
 var queryCases = []queryCase{
 	{`title = 'Hello World'`, []string{"Hello World"}},
 	{`title ~ 'hello'`, []string{"Hello World", "hello again"}}, // LIKE is ASCII case-insensitive in SQLite
@@ -76,7 +69,9 @@ var queryCases = []queryCase{
 	{`publishedAt = ''`, []string{"hello again", "snake_case tips", "Ünïcödé Straße"}},
 	{`publishedAt != ''`, []string{"Hello World", "100% Coverage", "snakeXcase"}},
 	{`publishedAt > '2024-01-01 00:00:00.000Z'`, []string{"Hello World", "100% Coverage"}},
-	{`publishedAt < '2024-01-01 00:00:00.000Z'`, []string{"snakeXcase", "hello again", "snake_case tips", "Ünïcödé Straße"}}, // '' < any date
+	// empty dates are NULL (fork rule, README): excluded from "<" and "!~" (upstream SQLite: '' < any date)
+	{`publishedAt < '2024-01-01 00:00:00.000Z'`, []string{"snakeXcase"}},
+	{`publishedAt !~ '2024'`, []string{"100% Coverage", "snakeXcase"}},
 	{`strftime('%Y', publishedAt) = '2025'`, []string{"100% Coverage"}},
 	{`created >= @todayStart`, nil}, // nil = all seeded posts
 	{`author.name = 'Quinn'`, nil},
@@ -163,10 +158,6 @@ func TestQuery(t *testing.T) {
 			}
 			got := titlesOf(t, r)
 			if !sameSet(got, want) {
-				if gap := knownGaps[tc.filter]; gap != "" {
-					t.Logf("KNOWN GAP (%s): %s\n    got  %q\n    want %q", gap, tc.filter, sorted(got), sorted(want))
-					continue
-				}
 				t.Errorf("%s\n    got  %q\n    want %q", tc.filter, sorted(got), sorted(want))
 			}
 		}
@@ -179,7 +170,9 @@ func TestQuery(t *testing.T) {
 		}{
 			{"-views,title", "Hello World"},
 			{"title", "100% Coverage"},
-			{"-publishedAt", "100% Coverage"}, // empty dates sort first ascending in SQLite, so last descending
+			// empty dates are NULL (fork rule, README): last ascending, first descending (upstream SQLite: the opposite)
+			{"publishedAt", "snakeXcase"},
+			{"-publishedAt,title", "hello again"},
 			{"author.name,-views", "Hello World"},
 			{"@random", ""},
 			{"-@rowid", ""},
@@ -198,10 +191,6 @@ func TestQuery(t *testing.T) {
 				continue
 			}
 			if tc.first != "" && got[0] != tc.first {
-				if gap := knownGaps["sort="+tc.sort]; gap != "" {
-					t.Logf("KNOWN GAP (%s): sort=%s: first %q, want %q", gap, tc.sort, got[0], tc.first)
-					continue
-				}
 				t.Errorf("sort=%s: first %q, want %q (order %q)", tc.sort, got[0], tc.first, got)
 			}
 		}

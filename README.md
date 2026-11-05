@@ -92,6 +92,7 @@ See: [pocketbase/pocketbase](https://github.com/pocketbase/pocketbase)
 - Transactions (record deletes, batch requests, `RunInTransaction`) are serialized across all nodes while `PB_TX_SERIALIZE` is on (the default), similar to SQLite's single writer. Keep them short: a 3-node test cluster handled about 250-700 transactions per second in total.
 - Add an index to relation fields that other records reference with cascade delete (or that are unset on delete): each delete looks up the referencing records inside its serialized transaction.
 - Record creates and updates lock the related records they reference (`FOR KEY SHARE`, like a foreign key check) until they commit, so a concurrent delete of a related record can't leave a dangling relation: the delete waits, or the write fails with the relation validation error (400). `SaveNoValidate` writes are not checked.
+- Empty date fields are stored as `NULL` (upstream SQLite stores `''`), and filters and sorts follow the PostgreSQL `NULL` rules everywhere (API, rules, Go queries, views): `due < X` and `due !~ '2024'` don't match empty dates, and empty dates sort last ascending and first descending (`sort=-due`). Use `due = ''` / `due != ''` to include or exclude them explicitly.
 - Multi-node production scenarios: see `examples/prodtest/README.md`.
 
 **Disclaimer**
