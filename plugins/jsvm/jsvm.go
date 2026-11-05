@@ -83,10 +83,10 @@ type Config struct {
 	HooksFilesPattern string
 
 	// HooksPoolSize specifies how many goja.Runtime instances to prewarm
-	// and keep for the JS app hooks gorotines execution.
+	// and keep for the JS app hooks goroutine execution to reuse.
 	//
-	// Zero or negative value means that it will create a new goja.Runtime
-	// on every fired goroutine.
+	// Zero or negative value means that no pool will be maintained and
+	// instead it will create a new goja.Runtime on every fired goroutine.
 	HooksPoolSize int
 
 	// MigrationsDir specifies the JS migrations directory.
@@ -218,7 +218,27 @@ func (p *plugin) registerMigrations() error {
 		vm.Set("__hooks", absHooksDir)
 
 		vm.Set("migrate", func(up, down func(txApp core.App) error) {
-			core.AppMigrations.Register(up, down, file)
+			// note: safe wrap to capture any eventual panic and to allow
+			// the error message to print the migration filename
+			core.AppMigrations.Register(
+				func(txApp core.App) error {
+					return routine.SafeWrap(func() error {
+						if up == nil {
+							return nil
+						}
+						return up(txApp)
+					})()
+				},
+				func(txApp core.App) error {
+					return routine.SafeWrap(func() error {
+						if down == nil {
+							return nil
+						}
+						return down(txApp)
+					})()
+				},
+				file,
+			)
 		})
 
 		if p.config.OnInit != nil {

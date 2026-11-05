@@ -6,8 +6,8 @@
 - ✅ Support horizontal scaling
 - ✅ Realtime events works normally with horizontal scaling
 - ✅ 100% test case pass rate across all unit and integration tests
-- ✅ Fully compatible with upstream PocketBase v0.40.1 SDKs/Docs
-- ✅ Versioning: `v<upstream>-hotfix<N>` for fork-specific PostgreSQL patches
+- ✅ Fully compatible with upstream PocketBase v0.40.6 SDKs/Docs
+- ✅ Versioning: `v<upstream>-pg` for upstream syncs, `v<upstream>-pg.<N>` for fork-specific PostgreSQL patches
 **Demo App**
 
 To demonstrate the horizontal scaling and realtime capabilities, I have deployed a **realtime chat demo app** on two different PocketBase instances.

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -486,7 +487,7 @@ func TestFilesystemServe(t *testing.T) {
 			map[string]string{
 				"Content-Disposition":     `inline; filename="test_name.png"`,
 				"Content-Type":            "image/png",
-				"Content-Length":          "77",
+				"Content-Length":          "78",
 				"Content-Security-Policy": csp,
 				"Cache-Control":           cacheControl,
 			},
@@ -501,7 +502,7 @@ func TestFilesystemServe(t *testing.T) {
 			map[string]string{
 				"Content-Disposition":     `attachment; filename="test_name_download.png"`,
 				"Content-Type":            "image/png",
-				"Content-Length":          "77",
+				"Content-Length":          "78",
 				"Content-Security-Policy": csp,
 				"Cache-Control":           cacheControl,
 			},
@@ -846,8 +847,8 @@ func TestFilesystemCopy(t *testing.T) {
 	}
 	defer f.Close()
 
-	if f.Size() != 77 {
-		t.Fatalf("Expected file size %d, got %d", 77, f.Size())
+	if f.Size() != 78 {
+		t.Fatalf("Expected file size %d, got %d", 78, f.Size())
 	}
 
 	checkHooks(t, hookCalls, map[string]int{"OnDelete": 0, "OnNewWriter": 0})
@@ -957,7 +958,7 @@ func TestFilesystemServeSingleRange(t *testing.T) {
 		t.Fatalf("Expected StatusCode %d, got %d", http.StatusPartialContent, result.StatusCode)
 	}
 
-	expectedRange := "bytes 0-20/77"
+	expectedRange := "bytes 0-20/78"
 	if cr := result.Header.Get("Content-Range"); cr != expectedRange {
 		t.Fatalf("Expected Content-Range %q, got %q", expectedRange, cr)
 	}
@@ -1090,6 +1091,44 @@ func TestFilesystemCreateThumb(t *testing.T) {
 	}
 }
 
+func TestFilesystemCreateThumbWithMaxPixelsLimit(t *testing.T) {
+	dir := createTestDir(t)
+	defer os.RemoveAll(dir)
+
+	fsys, err := filesystem.NewLocal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fsys.Close()
+
+	scenarios := []struct {
+		name      string
+		file      string
+		thumb     string
+		size      string
+		maxPixels int
+		expectErr bool
+	}{
+		{"default limit", "image.png", "thumb_WxH", "100x100", 0, false},
+		{"below limit", "image.png", "thumb_WxH", "100x100", 24, true},
+		{"exact limit", "image.png", "thumb_WxH", "100x100", 25, false},
+		{"above limit", "image.png", "thumb_WxH", "100x100", 26, false},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			os.Setenv("PB_THUMBS_MAX_SOURCE_PIXELS", strconv.Itoa(s.maxPixels))
+
+			err = fsys.CreateThumb(s.file, s.thumb, s.size)
+
+			hasErr := err != nil
+			if hasErr != s.expectErr {
+				t.Fatalf("Expected hasErr to be %v, got %v (%v)", s.expectErr, hasErr, err)
+			}
+		})
+	}
+}
+
 func TestFilesystemClose(t *testing.T) {
 	dir := createTestDir(t)
 	defer os.RemoveAll(dir)
@@ -1157,7 +1196,7 @@ func createTestDir(t *testing.T) string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		imgRect := image.Rect(0, 0, 1, 1) // tiny 1x1 png
+		imgRect := image.Rect(0, 0, 5, 5) // tiny 5x5 png
 		_ = png.Encode(file, imgRect)
 		file.Close()
 		err = os.WriteFile(filepath.Join(dir, "image.png.attrs"), []byte(`{"user.cache_control":"","user.content_disposition":"","user.content_encoding":"","user.content_language":"","user.content_type":"image/png","user.metadata":null}`), 0644)
@@ -1172,7 +1211,7 @@ func createTestDir(t *testing.T) string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		imgRect := image.Rect(0, 0, 1, 1) // tiny 1x1 jpg
+		imgRect := image.Rect(0, 0, 5, 5) // tiny 5x5 jpg
 		_ = jpeg.Encode(file, imgRect, nil)
 		file.Close()
 		err = os.WriteFile(filepath.Join(dir, "image.jpg.attrs"), []byte(`{"user.cache_control":"","user.content_disposition":"","user.content_encoding":"","user.content_language":"","user.content_type":"image/jpeg","user.metadata":null}`), 0644)
@@ -1208,7 +1247,7 @@ func createTestDir(t *testing.T) string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		imgRect := image.Rect(0, 0, 1, 1) // tiny 1x1 png
+		imgRect := image.Rect(0, 0, 5, 5) // tiny 5x5 png
 		_ = png.Encode(file, imgRect)
 		file.Close()
 	}
@@ -1220,7 +1259,7 @@ func createTestDir(t *testing.T) string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		imgRect := image.Rect(0, 0, 1, 1) // tiny 1x1 jpg
+		imgRect := image.Rect(0, 0, 5, 5) // tiny 5x5 jpg
 		_ = jpeg.Encode(file, imgRect, nil)
 		file.Close()
 		err = os.WriteFile(fullPath+".attrs", []byte(`{"user.cache_control":"","user.content_disposition":"","user.content_encoding":"","user.content_language":"","user.content_type":"image/jpeg","user.metadata":null}`), 0644)

@@ -9,7 +9,6 @@ import (
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/plugins/ghupdate"
 	"github.com/pocketbase/pocketbase/plugins/jsvm"
 	"github.com/pocketbase/pocketbase/plugins/migratecmd"
 	"github.com/pocketbase/pocketbase/tools/hook"
@@ -100,8 +99,8 @@ func main() {
 		Dir:          migrationsDir,
 	})
 
-	// GitHub selfupdate
-	ghupdate.MustRegister(app, app.RootCmd, ghupdate.Config{})
+	// No update command: the upstream update plugin installs the upstream
+	// SQLite release. Deploy a new fork binary or Docker image instead.
 
 	// static route to serves files from the provided public dir
 	// (if publicDir exists and the route path is not already defined)
