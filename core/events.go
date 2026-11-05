@@ -7,13 +7,13 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/pocketbase/pocketbase/tools/auth"
-	"github.com/pocketbase/pocketbase/tools/filesystem"
-	"github.com/pocketbase/pocketbase/tools/hook"
-	"github.com/pocketbase/pocketbase/tools/mailer"
-	"github.com/pocketbase/pocketbase/tools/router"
-	"github.com/pocketbase/pocketbase/tools/search"
-	"github.com/pocketbase/pocketbase/tools/subscriptions"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/auth"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/filesystem"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/hook"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/mailer"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/router"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/search"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/subscriptions"
 	"golang.org/x/crypto/acme/autocert"
 )
 
@@ -135,6 +135,15 @@ type ServeEvent struct {
 	//
 	// UIExtensions is a list with the superuser UI extensions.
 	UIExtensions []UIExtension
+
+	// StartBannerFunc defines a custom console startup banner.
+	//
+	// If not set, defaults to the system one that prints the
+	// current HTTP API and dashboard addresses.
+	//
+	// Assign StartBannerFunc to a function with an empty body if you
+	// want to disable the console print entirely.
+	StartBannerFunc func(baseURL string)
 }
 
 type UIExtension struct {

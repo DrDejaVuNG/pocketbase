@@ -4,8 +4,8 @@ import (
 	"context"
 	"math"
 
-	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/core/validators"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
+	"ganigeorgiev.com/pocketbase/pocketbase/core/validators"
 	"github.com/spf13/cast"
 )
 

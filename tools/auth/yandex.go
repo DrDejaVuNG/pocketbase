@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 
-	"github.com/pocketbase/pocketbase/tools/types"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/types"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/yandex"
 )

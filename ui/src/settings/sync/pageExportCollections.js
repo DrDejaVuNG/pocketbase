@@ -167,7 +167,7 @@ export function pageExportCollections(route) {
                                                 t.label({
                                                     htmlFor: checkboxId,
                                                     textContent: () => collection.name,
-                                                    // workaround https://github.com/pocketbase/pocketbase/issues/7771
+                                                    // workaround https://ganigeorgiev.com/pocketbase/discussions/7771
                                                     onclick: (e) => {
                                                         e.preventDefault();
                                                         const input = document.getElementById(e.target.htmlFor);

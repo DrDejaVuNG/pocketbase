@@ -103,6 +103,7 @@ function filePreviewModal(urlOrFactory) {
                     className: "link-hint filename-link",
                     ariaDescription: app.attrs.tooltip("Open in new tab"),
                     onclick: () => openInNewTab(),
+                    onauxclick: () => openInNewTab(),
                 },
                 t.span({ className: "txt" }, () => data.filename),
             ),

@@ -19,10 +19,10 @@ import (
 	"strings"
 	"testing"
 
-	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/tools/picker"
-	"github.com/pocketbase/pocketbase/tools/router"
-	"github.com/pocketbase/pocketbase/tools/types"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/picker"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/router"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/types"
 )
 
 type unwrapTester struct {

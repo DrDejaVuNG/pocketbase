@@ -13,10 +13,10 @@ import (
 	_ "net/http/pprof"
 	"os"
 
-	"github.com/pocketbase/pocketbase"
-	"github.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
 
-	_ "github.com/pocketbase/pocketbase/examples/prodtest/pbmigrations"
+	_ "ganigeorgiev.com/pocketbase/pocketbase/examples/prodtest/pbmigrations"
 )
 
 func main() {

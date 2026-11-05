@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/ganigeorgiev/fexpr"
-	"github.com/pocketbase/dbx"
+	"ganigeorgiev.com/fexpr"
+	"ganigeorgiev.com/pocketbase/dbx"
 )
 
 var TokenFunctions = map[string]func(

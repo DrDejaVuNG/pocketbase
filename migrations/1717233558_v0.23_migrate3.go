@@ -4,8 +4,8 @@ import (
 	"hash/crc32"
 	"strconv"
 
-	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/dbx"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
 )
 
 // note: this migration will be deleted in future version

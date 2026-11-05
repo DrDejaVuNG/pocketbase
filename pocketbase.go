@@ -12,15 +12,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pocketbase/pocketbase/cmd"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/hook"
-	"github.com/pocketbase/pocketbase/tools/list"
-	"github.com/pocketbase/pocketbase/tools/osutils"
-	"github.com/pocketbase/pocketbase/tools/routine"
+	"ganigeorgiev.com/pocketbase/pocketbase/cmd"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/hook"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/list"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/osutils"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/routine"
 	"github.com/spf13/cobra"
 
-	_ "github.com/pocketbase/pocketbase/migrations"
+	_ "ganigeorgiev.com/pocketbase/pocketbase/migrations"
 )
 
 var _ core.App = (*PocketBase)(nil)
@@ -198,7 +198,7 @@ func NewWithConfig(config Config) *PocketBase {
 	// hide the default help command (allow only `--help` flag)
 	pb.RootCmd.SetHelpCommand(&cobra.Command{Hidden: true})
 
-	// https://github.com/pocketbase/pocketbase/issues/6136
+	// https://ganigeorgiev.com/pocketbase/discussions/6136
 	pb.OnBootstrap().Bind(&hook.Handler[*core.BootstrapEvent]{
 		Id: ModerncDepsCheckHookId,
 		Func: func(be *core.BootstrapEvent) error {
@@ -394,8 +394,8 @@ func positiveIntConfig(value int, envKey string, defaultValue int) int {
 // - is the default help command
 // - is the default version command
 //
-// https://github.com/pocketbase/pocketbase/issues/404
-// https://github.com/pocketbase/pocketbase/discussions/1267
+// https://ganigeorgiev.com/pocketbase/discussions/404
+// https://ganigeorgiev.com/pocketbase/discussions/1267
 func (pb *PocketBase) skipBootstrap() bool {
 	flags := []string{
 		"-h",

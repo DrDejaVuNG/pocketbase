@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pocketbase/dbx"
+	"ganigeorgiev.com/pocketbase/dbx"
 )
 
 // mapFieldResolver resolves the registered field names to raw SQL identifiers.

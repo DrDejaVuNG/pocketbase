@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pocketbase/pocketbase/tools/filesystem/internal/s3blob/s3"
-	"github.com/pocketbase/pocketbase/tools/filesystem/internal/s3blob/s3/tests"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/filesystem/internal/s3blob/s3"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/filesystem/internal/s3blob/s3/tests"
 )
 
 func TestS3ListParamsEncode(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pocketbase/pocketbase/mails"
-	"github.com/pocketbase/pocketbase/tests"
+	"ganigeorgiev.com/pocketbase/pocketbase/mails"
+	"ganigeorgiev.com/pocketbase/pocketbase/tests"
 )
 
 func TestSendRecordAuthAlert(t *testing.T) {

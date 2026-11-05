@@ -6,10 +6,10 @@ import (
 	"slices"
 	"strings"
 
+	"ganigeorgiev.com/pocketbase/dbx"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/list"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/pocketbase/dbx"
-	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/tools/list"
 )
 
 // PostgreSQL only:

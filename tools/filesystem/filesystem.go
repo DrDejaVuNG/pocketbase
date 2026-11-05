@@ -16,16 +16,16 @@ import (
 	"strconv"
 	"strings"
 
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/filesystem/blob"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/filesystem/internal/fileblob"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/filesystem/internal/s3blob"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/filesystem/internal/s3blob/s3"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/hook"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/list"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/routine"
 	"github.com/disintegration/imaging"
 	"github.com/fatih/color"
 	"github.com/gabriel-vasile/mimetype"
-	"github.com/pocketbase/pocketbase/tools/filesystem/blob"
-	"github.com/pocketbase/pocketbase/tools/filesystem/internal/fileblob"
-	"github.com/pocketbase/pocketbase/tools/filesystem/internal/s3blob"
-	"github.com/pocketbase/pocketbase/tools/filesystem/internal/s3blob/s3"
-	"github.com/pocketbase/pocketbase/tools/hook"
-	"github.com/pocketbase/pocketbase/tools/list"
-	"github.com/pocketbase/pocketbase/tools/routine"
 	"github.com/spf13/cast"
 
 	// manually register the webp decoder because disintegration/imaging does not support webp
@@ -538,11 +538,11 @@ var manualExtensionContentTypes = map[string]string{
 	// https://github.com/gabriel-vasile/mimetype/pull/113
 	".css": "text/css",
 
-	// https://github.com/pocketbase/pocketbase/issues/6597
+	// https://ganigeorgiev.com/pocketbase/discussions/6597
 	".js":  "text/javascript",
 	".mjs": "text/javascript",
 
-	// https://github.com/pocketbase/pocketbase/discussions/7467
+	// https://ganigeorgiev.com/pocketbase/discussions/7467
 	".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 	".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -654,7 +654,7 @@ func (s *System) createThumb(originalKey, thumbKey, thumbSize string) error {
 
 	maxPixels := cast.ToInt64(os.Getenv("PB_THUMBS_MAX_SOURCE_PIXELS"))
 	if maxPixels <= 0 {
-		maxPixels = 250 << 20
+		maxPixels = 100 << 20
 	}
 
 	currentDimensions := int64(config.Width) * int64(config.Height)

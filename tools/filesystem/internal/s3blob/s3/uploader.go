@@ -14,7 +14,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pocketbase/pocketbase/tools/routine"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/routine"
 	"golang.org/x/sync/errgroup"
 )
 

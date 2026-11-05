@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"ganigeorgiev.com/pocketbase/dbx"
 	"github.com/jackc/pgx/v5"
-	"github.com/pocketbase/dbx"
 )
 
 // newTestDatabaseNames returns the connection url and the data and auxiliary

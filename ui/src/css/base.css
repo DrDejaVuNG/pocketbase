@@ -851,7 +851,7 @@ hr {
 }
 
 .loader {
-    --loaderSize: 24px;
+    --loaderSize: 22px;
     display: inline-flex;
     gap: 5px;
     align-items: center;
@@ -875,7 +875,7 @@ hr {
         animation: rotate var(--loaderAnimationSpeed) infinite linear;
     }
     &.sm {
-        --loaderSize: 20px;
+        --loaderSize: 18px;
         font-size: var(--smFontSize);
     }
     &.lg {

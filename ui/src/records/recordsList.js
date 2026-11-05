@@ -130,7 +130,7 @@ window.app.components.recordsList = function(propsArg = {}) {
                     ?.join(",");
 
                 // no explicit presentable -> try to utilize the first found implicit presentable field
-                // (https://github.com/pocketbase/pocketbase/discussions/7735)
+                // (https://ganigeorgiev.com/pocketbase/discussions/7735)
                 if (normalizedSort == "") {
                     for (let name of app.utils.fallbackPresentableProps) {
                         if (sortCollection?.fields?.find((f) => f.name == name)) {
@@ -632,7 +632,7 @@ window.app.components.recordsList = function(propsArg = {}) {
                                     }),
                                     t.label({
                                         htmlFor: uniqueId + record.id,
-                                        // workaround https://github.com/pocketbase/pocketbase/issues/7771
+                                        // workaround https://ganigeorgiev.com/pocketbase/discussions/7771
                                         onclick: (e) => {
                                             e.preventDefault();
                                             const input = document.getElementById(e.target.htmlFor);

@@ -6,11 +6,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/tools/dbutils"
-	"github.com/pocketbase/pocketbase/tools/hook"
-	"github.com/pocketbase/pocketbase/tools/security"
-	"github.com/pocketbase/pocketbase/tools/types"
+	"ganigeorgiev.com/pocketbase/dbx"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/dbutils"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/hook"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/security"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/types"
 	"github.com/spf13/cast"
 )
 

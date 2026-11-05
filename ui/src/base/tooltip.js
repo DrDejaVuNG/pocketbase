@@ -1,3 +1,5 @@
+// @todo consider replacing with pure css once there is better support for anchor positioning
+
 const tolerance = 5;
 
 const tooltip = t.div({

@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"testing"
 
-	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/tools/router"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/router"
 )
 
 func TestNewApiErrorWithRawData(t *testing.T) {

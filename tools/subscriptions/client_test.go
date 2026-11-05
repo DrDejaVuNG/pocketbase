@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pocketbase/pocketbase/tools/subscriptions"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/subscriptions"
 )
 
 func TestNewDefaultClient(t *testing.T) {

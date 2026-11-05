@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pocketbase/pocketbase/apis"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/hook"
+	"ganigeorgiev.com/pocketbase/pocketbase/apis"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/hook"
 )
 
 // ApiScenario defines a single api request test case/scenario.
@@ -181,7 +181,7 @@ func (scenario *ApiScenario) test(t testing.TB) {
 		}
 	}
 
-	// https://github.com/pocketbase/pocketbase/discussions/7267
+	// https://ganigeorgiev.com/pocketbase/discussions/7267
 	if scenario.TestAppFactory == nil || !scenario.DisableTestAppCleanup {
 		defer testApp.Cleanup()
 	}

@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/hook"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/list"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/routine"
+	"ganigeorgiev.com/pocketbase/pocketbase/ui"
 	"github.com/fatih/color"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/hook"
-	"github.com/pocketbase/pocketbase/tools/list"
-	"github.com/pocketbase/pocketbase/tools/routine"
-	"github.com/pocketbase/pocketbase/ui"
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -216,8 +216,16 @@ func Serve(app core.App, config ServeConfig) error {
 	serveEvent.CertManager = certManager
 	serveEvent.InstallerFunc = DefaultInstallerFunc
 
+	if config.ShowStartBanner {
+		serveEvent.StartBannerFunc = func(baseURL string) {
+			defaultStartBannerFunc(baseURL, config.PathPrefix)
+		}
+	}
+
 	// trigger the OnServe hook and start the tcp listener
 	serveHookErr := app.OnServe().Trigger(serveEvent, func(e *core.ServeEvent) error {
+		serveEvent = e
+
 		// Support path prefix for the API and dashboard routes.
 		if config.PathPrefix != "" {
 			e.Router.Prefix = config.PathPrefix
@@ -281,24 +289,8 @@ func Serve(app core.App, config ServeConfig) error {
 		return errors.New("The OnServe listener was not initialized. Did you forget to call the ServeEvent.Next() method?")
 	}
 
-	if config.ShowStartBanner {
-		date := new(strings.Builder)
-		log.New(date, "", log.LstdFlags).Print()
-
-		bold := color.New(color.Bold).Add(color.FgGreen)
-		bold.Printf(
-			"%s Server started at %s\n",
-			strings.TrimSpace(date.String()),
-			color.CyanString("%s", baseURL),
-		)
-
-		regular := color.New()
-		if ui.DistDirFS == nil {
-			regular.Printf("└─ REST API:  %s\n", color.CyanString("%s/api/", strings.ReplaceAll(baseURL, "0.0.0.0", "127.0.0.1")+config.PathPrefix))
-		} else {
-			regular.Printf("├─ REST API:  %s\n", color.CyanString("%s/api/", strings.ReplaceAll(baseURL, "0.0.0.0", "127.0.0.1")+config.PathPrefix))
-			regular.Printf("└─ Dashboard: %s\n", color.CyanString("%s/_/", strings.ReplaceAll(baseURL, "0.0.0.0", "127.0.0.1")+config.PathPrefix))
-		}
+	if serveEvent.StartBannerFunc != nil {
+		serveEvent.StartBannerFunc(baseURL)
 	}
 
 	var serveErr error
@@ -319,6 +311,30 @@ func Serve(app core.App, config ServeConfig) error {
 	}
 
 	return nil
+}
+
+// defaultStartBannerFunc prints the server start message. The API and
+// dashboard links include the path prefix and use 127.0.0.1 for a 0.0.0.0 bind.
+func defaultStartBannerFunc(baseURL string, pathPrefix string) {
+	date := new(strings.Builder)
+	log.New(date, "", log.LstdFlags).Print()
+
+	bold := color.New(color.Bold).Add(color.FgGreen)
+	bold.Printf(
+		"%s Server started at %s\n",
+		strings.TrimSpace(date.String()),
+		color.CyanString("%s", baseURL),
+	)
+
+	linksBaseURL := strings.ReplaceAll(baseURL, "0.0.0.0", "127.0.0.1") + pathPrefix
+
+	regular := color.New()
+	if ui.DistDirFS == nil {
+		regular.Printf("> REST API:  %s\n", color.CyanString("%s/api/", linksBaseURL))
+	} else {
+		regular.Printf("> Dashboard: %s\n", color.CyanString("%s/_/", linksBaseURL))
+		regular.Printf("> REST API:  %s\n", color.CyanString("%s/api/", linksBaseURL))
+	}
 }
 
 // serverAddrToHost loosely converts http.Server.Addr string into a host to print.

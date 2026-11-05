@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"regexp"
 
-	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/core"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
 )
 
 func backupCreate(e *core.RequestEvent) error {

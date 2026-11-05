@@ -18,14 +18,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pocketbase/dbx"
-	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/auth"
-	"github.com/pocketbase/pocketbase/tools/dbutils"
-	"github.com/pocketbase/pocketbase/tools/filesystem"
-	"github.com/pocketbase/pocketbase/tools/inflector"
-	"github.com/pocketbase/pocketbase/tools/list"
+	"ganigeorgiev.com/pocketbase/dbx"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/auth"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/dbutils"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/filesystem"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/inflector"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/list"
 	"golang.org/x/oauth2"
 )
 

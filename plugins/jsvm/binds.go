@@ -18,23 +18,23 @@ import (
 	"strings"
 	"time"
 
+	"ganigeorgiev.com/pocketbase/dbx"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
+	"ganigeorgiev.com/pocketbase/pocketbase/apis"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/forms"
+	"ganigeorgiev.com/pocketbase/pocketbase/mails"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/filesystem"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/hook"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/inflector"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/mailer"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/router"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/security"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/store"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/subscriptions"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/types"
 	"github.com/dop251/goja"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/pocketbase/dbx"
-	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/apis"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/forms"
-	"github.com/pocketbase/pocketbase/mails"
-	"github.com/pocketbase/pocketbase/tools/filesystem"
-	"github.com/pocketbase/pocketbase/tools/hook"
-	"github.com/pocketbase/pocketbase/tools/inflector"
-	"github.com/pocketbase/pocketbase/tools/mailer"
-	"github.com/pocketbase/pocketbase/tools/router"
-	"github.com/pocketbase/pocketbase/tools/security"
-	"github.com/pocketbase/pocketbase/tools/store"
-	"github.com/pocketbase/pocketbase/tools/subscriptions"
-	"github.com/pocketbase/pocketbase/tools/types"
 	"github.com/spf13/cast"
 	"github.com/spf13/cobra"
 )
@@ -465,8 +465,7 @@ func BindCore(vm *goja.Runtime) {
 		return &v
 	})
 	vm.Set("nullObject", func() *types.JSONMap[any] {
-		// cannot be nil because of https://github.com/dop251/goja/issues/822
-		v := types.JSONMap[any]{}
+		var v types.JSONMap[any]
 		return &v
 	})
 

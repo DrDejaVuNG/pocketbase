@@ -3,9 +3,9 @@ package issues
 import (
 	"testing"
 
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tests"
-	"github.com/pocketbase/pocketbase/tools/search"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/tests"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/search"
 )
 
 // https://github.com/fondoger/pocketbase/issues/56

@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/tools/inflector"
-	"github.com/pocketbase/pocketbase/tools/list"
+	"ganigeorgiev.com/pocketbase/dbx"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/inflector"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/list"
 )
 
 type NullFallbackPreference int

@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/pocketbase/pocketbase/tools/archive"
-	"github.com/pocketbase/pocketbase/tools/osutils"
-	"github.com/pocketbase/pocketbase/tools/security"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/archive"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/osutils"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/security"
 )
 
 // RestoreBackup restores the backup with the specified name and restarts
@@ -46,7 +46,7 @@ import (
 //
 // Note that if your pb_data has custom network mounts as subdirectories, then
 // it is possible the restore to fail during the `os.Rename` operations
-// (see https://github.com/pocketbase/pocketbase/issues/4647).
+// (see https://ganigeorgiev.com/pocketbase/discussions/4647).
 func (app *BaseApp) RestoreBackup(ctx context.Context, name string) error {
 	// PostgreSQL:
 	// The built-in restore is not supported when running on PostgreSQL because

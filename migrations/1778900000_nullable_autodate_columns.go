@@ -1,7 +1,7 @@
 package migrations
 
 import (
-	"github.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
 )
 
 // PostgreSQL: autodate columns used to be created as "TIMESTAMP DEFAULT NOW() NOT NULL",

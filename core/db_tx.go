@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/pocketbase/dbx"
+	"ganigeorgiev.com/pocketbase/dbx"
 )
 
 // txSerializationLockKey is the PostgreSQL advisory lock key used to

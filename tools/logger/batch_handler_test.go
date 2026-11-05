@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	validation "github.com/pocketbase/ozzo-validation/v4"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
 )
 
 func TestNewBatchHandlerPanic(t *testing.T) {

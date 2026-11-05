@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pocketbase/dbx"
+	"ganigeorgiev.com/pocketbase/dbx"
 )
 
 // advisoryLockKey identifies the caller role (data vs auxiliary database

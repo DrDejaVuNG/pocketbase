@@ -3,8 +3,8 @@ package issues
 import (
 	"testing"
 
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tests"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/tests"
 )
 
 // https://github.com/fondoger/pocketbase/issues/35

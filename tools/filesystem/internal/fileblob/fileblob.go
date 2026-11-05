@@ -66,7 +66,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pocketbase/pocketbase/tools/filesystem/blob"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/filesystem/blob"
 )
 
 const defaultPageSize = 1000

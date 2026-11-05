@@ -8,11 +8,11 @@ import (
 	"regexp"
 	"strings"
 
+	"ganigeorgiev.com/pocketbase/dbx"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
+	"ganigeorgiev.com/pocketbase/pocketbase/core/validators"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/security"
 	"github.com/google/uuid"
-	"github.com/pocketbase/dbx"
-	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/core/validators"
-	"github.com/pocketbase/pocketbase/tools/security"
 	"github.com/spf13/cast"
 )
 

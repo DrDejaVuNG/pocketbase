@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/tools/inflector"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/inflector"
 )
 
 // SafeErrorItem defines a common error interface for a printable public safe error.

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/tools/search"
+	"ganigeorgiev.com/pocketbase/dbx"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/search"
 )
 
 func TestSimpleFieldResolverUpdateQuery(t *testing.T) {

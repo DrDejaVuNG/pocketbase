@@ -3,8 +3,8 @@ package apis
 import (
 	"time"
 
-	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/core"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
 )
 
 // note: for now allow superusers but it may change in the future to allow access

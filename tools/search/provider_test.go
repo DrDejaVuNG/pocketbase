@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"ganigeorgiev.com/pocketbase/dbx"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/list"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/security"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/tools/list"
-	"github.com/pocketbase/pocketbase/tools/security"
 	_ "modernc.org/sqlite"
 )
 

@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tests"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/tests"
 )
 
 func TestFindAllMFAsByRecord(t *testing.T) {

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"testing"
 
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
+	"ganigeorgiev.com/pocketbase/pocketbase/core/validators"
+	"ganigeorgiev.com/pocketbase/pocketbase/tests"
 	"github.com/jackc/pgx/v5/pgconn"
-	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/core/validators"
-	"github.com/pocketbase/pocketbase/tests"
 )
 
 func TestUniqueId(t *testing.T) {

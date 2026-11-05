@@ -1,8 +1,8 @@
 package migrations
 
 import (
-	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/dbx"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
 )
 
 // PostgreSQL: older versions created UUID typed primary key columns for

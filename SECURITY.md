@@ -1,34 +1,31 @@
 # Security
 
-**Keep in mind that PocketBase is a non-commercial open source project, maintained entirely on volunteer basis (there is no company or dedicated team behind it), and there are no bounties!**
+If you want to responsibly report a security issue, you can either submit a [**private bug**](https://ganigeorgiev.com/pocketbase/discussions/new/Bugs?private=1) OR send an e-mail to **support@pocketbase.io**.
 
-If you want to responsibly report a security issue you'll have to reach out as a human to **support at pocketbase.io**.
-
-This means:
-- no overconfident and arrogant tone
-- no threatening deadlines
-- no requirement for me to login in your security platform just to read the report
-- no inflated severity (we can discuss the CVSS score after confirming the issue)
+Please reach out as a human! This means:
 - no LLMs usage as part of your report description or followup communication
+- no inflated severity (we can discuss the CVSS score after confirming the issue)
+- no overconfident and arrogant tone
+- no requirement for me to download random files or login in your security platform just to read the report
+- no threatening deadlines (me and everybody else that works on the project are doing it entirely in their spare time)
 
-Reports that don't follow the above will NOT be reviewed no matter of their validity _(you are of course free to publish whatever you want; see also [#7718](https://github.com/pocketbase/pocketbase/discussions/7718))_.
+Reports that don't follow the above will NOT be reviewed no matter of their validity _(you are of course free to publish whatever you want; see also [#7718](https://ganigeorgiev.com/pocketbase/discussions/7718))_.
 
 **Or in other words - a simple _"Hey I think I found a security issue when I do X"_ is enough.**
+I don't care how did you find the vulnerability but if you can't be bothered to even write a single sentence on your own I have no reason to give you credit or work with you in general.
 
-I try to be as responsive as possible and usually address security issues within couple days but if you didn't receive a reply from me for more than a week it is very likely that your email was flagged and in that case please open a GitHub issue or discussion just mentioning that you found a vulnerability and want to report it so that I can see the notification and will try to contact you for more details.
-
-In case the vulnerability is confirmed:
+Keep in mind that PocketBase is a non-commercial open source project, maintained entirely on volunteer basis (there is no company or dedicated team behind it), and there are no bounties! With that said, I try to be as responsive as possible and usually address security issues within couple days. In case the vulnerability is confirmed:
 
 - I'll start working on a local fix.
 - Once the fix is implemented locally, I'll publish a pre-announcement with a scheduled release date _(and when possible an approximate release time)_.
-- After the release, I'll publish a GitHub security advisory and CVE with remediation steps and **minimal** details regarding the found exploit _(you are free to publish PoC and more details in your own blog, gist, etc. but it is advised to wait at least a week after the release to allow enough time for people to patch their instances before making it more publicly known)_.
+- After the release, I'll publish a CVE with remediation steps and **minimal** details regarding the found exploit _(you are free to publish PoC and more details in your own blog, gist, etc. but it is advised to wait at least a week after the release to allow enough time for people to patch their instances before making it more publicly known)_.
 
 ### Below is a short list of previous reports that are NOT considered security issues:
 
 <details>
 <summary><strong>Stored XSS</strong></summary>
 
-This was discussed several times, both privately and [publicly](https://github.com/pocketbase/pocketbase/discussions/6694), but I remain on the opinion that it should be handled primarily on the client-side.
+This was discussed several times, both privately and [publicly](https://ganigeorgiev.com/pocketbase/discussions/6694), but I remain on the opinion that it should be handled primarily on the client-side.
 
 Modern browsers recently introduced a basic [`Sanitizer` interface](https://developer.mozilla.org/en-US/docs/Web/API/Sanitizer) that could help filtering HTML strings without external libraries.
 
@@ -38,7 +35,7 @@ Having also a default [Content Security Policy (CSP)](https://developer.mozilla.
 <details>
 <summary><strong>SQL injection in low level DB methods like <code>app.DeleteTable(dangerousName)</code></strong></summary>
 
-This is working correctly and it is not an issue but it is a common report most likely found by LLM or some other automated tools that may have stumbled on the [NB! code comments](https://pkg.go.dev/github.com/pocketbase/pocketbase@master/core#BaseApp.DeleteTable).
+This is working correctly and it is not an issue but it is a common report most likely found by LLM or some other automated tools that may have stumbled on the [NB! code comments](https://pkg.go.dev/ganigeorgiev.com/pocketbase/pocketbase@master/core#BaseApp.DeleteTable).
 
 Raw SQL statements, table and column names are not parameterized and they are vulnerable to SQL injection if used with untrusted input. The documentation as seen above already warns against it. In recent PocketBase releases, many of the arguments of these methods were also prefixed with `dangerous*` to make it even more clear that they should be used with caution.
 </details>
@@ -59,7 +56,7 @@ For the cases where transactions are really needed, users can utilize the [Batch
 <details>
 <summary><strong>List/Search side-channel attacks</strong></summary>
 
-Over the years we've implemented several extra checks to minimize the risk of List/Search side-channel attacks (see especially [v0.32.0](https://github.com/pocketbase/pocketbase/blob/master/CHANGELOG_23_39.md#v0320)) but users need to be aware that all client-side filtered fields are technically subject to timing attacks _(whether they are practical or not is a different topic)_.
+Over the years we've implemented several extra checks to minimize the risk of List/Search side-channel attacks (see especially [v0.32.0](https://ganigeorgiev.com/pocketbase/pocketbase/blob/master/CHANGELOG_23_39.md#v0320)) but users need to be aware that all client-side filtered fields are technically subject to timing attacks _(whether they are practical or not is a different topic)_.
 
 This is by design and it is accepted tradeoff between performance, security and usability.
 
@@ -76,7 +73,7 @@ If you suspect that an OAuth2 vendor is malicious and cannot be trusted then you
 
 If someone is able to tamper with the OAuth2 responses then the entire OAuth2 flow can be thrown out of the window because they will be practically able to authenticate as any of your existing users and the eventual avatar URL probing request is the least of your problem.
 
-~Nonetheless, in future PocketBase releases there will be [extra `localhost` domain like checks](https://github.com/orgs/pocketbase/projects/2/views/1?pane=issue&itemId=159545722) when assigning the OAuth2 avatar URL to a `file` field that will further minimize the risk of internal network probing requests in case of a vulnerable OAuth2 provider.~ _Done._
+~~Nonetheless, in future PocketBase releases there will be extra `localhost` domain like checks when assigning the OAuth2 avatar URL to a `file` field that will further minimize the risk of internal network probing requests in case of a vulnerable OAuth2 provider.~~ _Done._
 </details>
 
 <details>

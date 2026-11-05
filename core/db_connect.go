@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"net/url"
 
+	"ganigeorgiev.com/pocketbase/dbx"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/pocketbase/dbx"
 	_ "modernc.org/sqlite"
 )
 

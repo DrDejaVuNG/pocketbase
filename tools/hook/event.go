@@ -24,6 +24,9 @@ var _ Resolver = (*Event)(nil)
 //	}
 type Event struct {
 	next func() error
+
+	// Extra holds any dynamic data that could be passed between event handlers.
+	Extra map[string]any
 }
 
 // Next calls the next hook handler.

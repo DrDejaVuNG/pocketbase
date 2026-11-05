@@ -4,8 +4,8 @@ import (
 	"errors"
 	"time"
 
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/security"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/pocketbase/pocketbase/tools/security"
 )
 
 // Supported record token types

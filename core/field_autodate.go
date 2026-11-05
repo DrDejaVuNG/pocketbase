@@ -3,9 +3,9 @@ package core
 import (
 	"context"
 
-	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/core/validators"
-	"github.com/pocketbase/pocketbase/tools/types"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
+	"ganigeorgiev.com/pocketbase/pocketbase/core/validators"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/types"
 )
 
 func init() {

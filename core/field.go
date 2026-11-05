@@ -6,9 +6,9 @@ import (
 	"regexp"
 	"strings"
 
-	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/core/validators"
-	"github.com/pocketbase/pocketbase/tools/list"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
+	"ganigeorgiev.com/pocketbase/pocketbase/core/validators"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/list"
 )
 
 var fieldNameRegex = regexp.MustCompile(`^\w+$`)

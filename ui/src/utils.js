@@ -898,7 +898,7 @@ const utils = {
         }
 
         // for broader compatibility replace localhost with 127.0.0.1
-        // (see https://github.com/pocketbase/js-sdk/issues/21)
+        // (see https://ganigeorgiev.com/pocketbase/js-sdk/issues/21)
         return url.replace("//localhost", "//127.0.0.1");
     },
 

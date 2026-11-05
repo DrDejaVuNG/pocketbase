@@ -3,12 +3,14 @@ package mailer
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"mime"
 	"net/http"
 	"os/exec"
 	"strings"
 
-	"github.com/pocketbase/pocketbase/tools/hook"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/hook"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/security"
 )
 
 var _ Mailer = (*Sendmail)(nil)
@@ -46,8 +48,14 @@ func (c *Sendmail) send(m *Message) error {
 	headers := make(http.Header)
 	headers.Set("Subject", mime.QEncoding.Encode("utf-8", m.Subject))
 	headers.Set("From", m.From.String())
-	headers.Set("Content-Type", "text/html; charset=UTF-8")
 	headers.Set("To", strings.Join(toAddresses, ","))
+
+	// @todo evaluate handling multipart/mixed together with the attachments support
+	if m.HTML != "" {
+		headers.Set("Content-Type", "text/html; charset=UTF-8")
+	} else {
+		headers.Set("Content-Type", "text/plain; charset=UTF-8")
+	}
 
 	if len(m.Cc) > 0 {
 		headers.Set("Cc", strings.Join(addressesToStrings(m.Cc, false), ","))
@@ -55,6 +63,19 @@ func (c *Sendmail) send(m *Message) error {
 
 	if len(m.Bcc) > 0 {
 		headers.Set("Bcc", strings.Join(addressesToStrings(m.Bcc, false), ","))
+	}
+
+	// add custom headers (if any)
+	for k, v := range m.Headers {
+		headers.Set(k, v)
+	}
+
+	// add a default message id if missing
+	if headers.Get("Message-ID") == "" {
+		fromParts := strings.Split(m.From.Address, "@")
+		if len(fromParts) == 2 {
+			headers.Set("Message-ID", fmt.Sprintf("<%s@%s>", security.PseudorandomString(15), fromParts[1]))
+		}
 	}
 
 	cmdPath, err := findSendmailPath()

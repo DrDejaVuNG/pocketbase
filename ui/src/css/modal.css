@@ -169,7 +169,7 @@
     }
     &.preview {
         width: min-content;
-        min-width: 400px;
+        min-width: 370px;
         min-height: 300px;
         .modal-footer {
             padding: var(--smSpacing);

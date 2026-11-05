@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pocketbase/pocketbase/tools/types"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/types"
 )
 
 // note: used primarily for the tests

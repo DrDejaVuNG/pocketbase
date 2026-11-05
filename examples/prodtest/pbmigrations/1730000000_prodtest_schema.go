@@ -3,9 +3,9 @@
 package pbmigrations
 
 import (
-	"github.com/pocketbase/pocketbase/core"
-	m "github.com/pocketbase/pocketbase/migrations"
-	"github.com/pocketbase/pocketbase/tools/types"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
+	m "ganigeorgiev.com/pocketbase/pocketbase/migrations"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/types"
 )
 
 const (

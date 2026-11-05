@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
 	"github.com/spf13/cobra"
 )
 

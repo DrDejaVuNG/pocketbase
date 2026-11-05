@@ -27,7 +27,7 @@ export function input(props) {
                 value: () => app.utils.toDatetimeLocalInputValue(props.record[props.field.name]),
                 onchange: (e) => {
                     // don't clear until blur
-                    // https://github.com/pocketbase/pocketbase/issues/7726
+                    // https://ganigeorgiev.com/pocketbase/discussions/7726
                     if (!e.target.value) {
                         return;
                     }

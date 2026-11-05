@@ -3,7 +3,7 @@ package validators
 import (
 	"reflect"
 
-	validation "github.com/pocketbase/ozzo-validation/v4"
+	validation "ganigeorgiev.com/pocketbase/ozzo-validation/v4"
 )
 
 // Equal checks whether the validated value matches another one from the same type.
