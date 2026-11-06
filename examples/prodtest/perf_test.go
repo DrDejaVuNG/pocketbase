@@ -7,8 +7,10 @@ package main
 // without total, list with a relation rule, view, create, update, delete,
 // transactional counter, 3-record batch, mixed) against a dedicated cluster,
 // printing one "PERF" line per workload: req/s, p50/p99 latency, errors, SQL
-// statements and DB time per request (pg_stat_statements), commits, advisory
-// lock waiters, new PostgreSQL sessions and pool waits.
+// statements and DB time per request (pg_stat_statements), CPU per request of
+// the nodes (appCPU) and of the PostgreSQL container (pgCPU), commits,
+// advisory lock waiters, new PostgreSQL sessions and pool waits. On a shared
+// machine req/s varies between runs; the CPU per request is the stable number.
 //
 // It runs only with PRODTEST_PERF=1. Compare builds with PRODTEST_BIN and
 // PRODTEST_POSTGRES_DURABLE=1 (production-like fsync settings), eg.:
@@ -22,6 +24,7 @@ package main
 // PERF_DURATION   seconds per workload (default 6)
 // PERF_WORKLOADS  ","-separated subset of the workloads
 // PERF_EXEC_MODE  pgx default_query_exec_mode for the nodes (eg. "cache_statement")
+// PERF_URL_PARAMS extra connection URL params for the nodes (eg. "plan_cache_mode=force_custom_plan")
 // PERF_SETUP_SQL  extra SQL executed after seeding (eg. "CREATE INDEX ...")
 // PERF_TOP        print the most frequent statements ("full" = untruncated SQL)
 // PERF_PPROF      file prefix; CPU-profiles node1 during every workload
@@ -35,6 +38,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -72,10 +76,19 @@ func TestPerf(t *testing.T) {
 		}
 	}
 
-	if mode := os.Getenv("PERF_EXEC_MODE"); mode != "" {
+	if mode, params := os.Getenv("PERF_EXEC_MODE"), os.Getenv("PERF_URL_PARAMS"); mode != "" || params != "" {
 		u := *pg.appURL
 		q := u.Query()
-		q.Set("default_query_exec_mode", mode)
+		if mode != "" {
+			q.Set("default_query_exec_mode", mode)
+		}
+		extra, err := url.ParseQuery(params)
+		if err != nil {
+			t.Fatalf("PERF_URL_PARAMS: %v", err)
+		}
+		for k, v := range extra {
+			q[k] = v
+		}
 		u.RawQuery = q.Encode()
 		nodeEnv = append(nodeEnv, "POSTGRES_URL="+u.String())
 	}
@@ -200,6 +213,7 @@ func TestPerf(t *testing.T) {
 		}
 		runLoad(workers, time.Second, wl.op) // warm up
 		statsBefore := f.dbStats(nodes)
+		appCPU0, pgCPU0 := f.c.appCPU(), pgCPU()
 		pg.exec("postgres", `SELECT pg_stat_statements_reset()`)
 		commits0, _ := pg.queryInt("postgres", `SELECT xact_commit FROM pg_stat_database WHERE datname = $1`, f.c.dataDB)
 		sessions0, _ := pg.queryInt("postgres", `SELECT sessions FROM pg_stat_database WHERE datname = $1`, f.c.dataDB)
@@ -237,6 +251,7 @@ func TestPerf(t *testing.T) {
 			}
 		}
 
+		appCPU1, pgCPU1 := f.c.appCPU(), pgCPU()
 		commits1, _ := pg.queryInt("postgres", `SELECT xact_commit FROM pg_stat_database WHERE datname = $1`, f.c.dataDB)
 		sessions1, _ := pg.queryInt("postgres", `SELECT sessions FROM pg_stat_database WHERE datname = $1`, f.c.dataDB)
 		statsAfter := f.dbStats(nodes)
@@ -246,10 +261,12 @@ func TestPerf(t *testing.T) {
 		if lockSamples.Load() > 0 {
 			avgWaiters = float64(lockWaiters.Load()) / float64(lockSamples.Load())
 		}
-		fmt.Printf("PERF %-10s %-14s %7.0f req/s  p50 %7.2fms  p99 %7.2fms  err %d  stmts/req %5.1f  dbms/req %6.3f  commits/req %4.1f  lockWaiters %5.1f  newConns %d  poolWait %s\n",
+		fmt.Printf("PERF %-10s %-14s %7.0f req/s  p50 %7.2fms  p99 %7.2fms  err %d  stmts/req %5.1f  dbms/req %6.3f  appCPU %6.3fms/req  pgCPU %6.3fms/req  commits/req %4.1f  lockWaiters %5.1f  newConns %d  poolWait %s\n",
 			label, wl.name, float64(res.requests)/res.elapsed.Seconds(),
 			float64(res.percentile(0.5).Microseconds())/1000, float64(res.percentile(0.99).Microseconds())/1000,
 			res.errors, float64(calls)/float64(max(ok, 1)), execMs/float64(max(ok, 1)),
+			float64((appCPU1-appCPU0).Microseconds())/1000/float64(max(ok, 1)),
+			float64((pgCPU1-pgCPU0).Microseconds())/1000/float64(max(ok, 1)),
 			float64(commits1-commits0)/float64(max(ok, 1)), avgWaiters, sessions1-sessions0, poolWaitDelta(statsBefore, statsAfter))
 		if res.errors > 0 {
 			fmt.Printf("PERF %-10s %-14s sample error: %s\n", label, wl.name, truncate(res.sample, 300))
@@ -365,4 +382,57 @@ func captureProfile(addr string, d time.Duration, file string) string {
 		return err.Error()
 	}
 	return ""
+}
+
+// appCPU returns the user+system CPU time of the running node processes.
+func (c *cluster) appCPU() time.Duration {
+	var ticks int64
+	for _, n := range c.nodes {
+		n.mu.Lock()
+		pid := 0
+		if n.cmd != nil && n.cmd.Process != nil {
+			pid = n.cmd.Process.Pid
+		}
+		n.mu.Unlock()
+		raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if pid == 0 || err != nil {
+			continue
+		}
+		s := string(raw)
+		fields := strings.Fields(s[strings.LastIndexByte(s, ')')+2:]) // fields from #3 (state)
+		utime, _ := strconv.ParseInt(fields[11], 10, 64)              // #14 utime
+		stime, _ := strconv.ParseInt(fields[12], 10, 64)              // #15 stime
+		ticks += utime + stime
+	}
+	return time.Duration(ticks) * time.Second / 100 // USER_HZ (CLK_TCK) is 100 on Linux
+}
+
+var (
+	pgCgroupOnce sync.Once
+	pgCgroupStat string
+)
+
+// pgCPU returns the CPU time of the harness PostgreSQL container (backends
+// and background processes), 0 for an external server or without cgroup v2.
+func pgCPU() time.Duration {
+	pgCgroupOnce.Do(func() {
+		if pg.container == "" {
+			return
+		}
+		out, err := exec.Command("docker", "inspect", "-f", "{{.Id}}", pg.container).Output()
+		if err == nil {
+			pgCgroupStat = "/sys/fs/cgroup/system.slice/docker-" + strings.TrimSpace(string(out)) + ".scope/cpu.stat"
+		}
+	})
+	raw, err := os.ReadFile(pgCgroupStat)
+	if err != nil {
+		return 0
+	}
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(line, "usage_usec "); ok {
+			us, _ := strconv.ParseInt(v, 10, 64)
+			return time.Duration(us) * time.Microsecond
+		}
+	}
+	return 0
 }
