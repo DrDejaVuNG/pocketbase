@@ -52,10 +52,11 @@ their own cluster.
 | `TestStartup` | concurrent cold start on missing databases; rolling restart under write load |
 | `TestRealtime` | SSE delivery across nodes, subscribe through another node, rules and hidden fields on remote nodes, no secrets in NOTIFY payloads, `\|\|` filters, records over 8 KB, auth changes, disconnect cleanup, fan-out burst |
 | `TestPropagation` | collection/rule/settings changes (Web API and `app.Save`) reaching every node; schema change window |
+| `TestSchemaChange` | tables changed while every node serves (psql `ALTER TABLE`, collection changes through the API): no failed lists, views, creates, batches or transactions with the default statement cache |
 | `TestConcurrency` | unique index collisions, duplicate signup, transactional counters and transfers, OTP single use, batch atomicity, cascade delete vs create |
 | `TestQuery` | filter/sort parity with SQLite PocketBase on production column types, pagination/expand/fields, view collection, numeric and `:each` rules, `geoDistance`, multi-row inserts with default ids |
 | `TestResilience` | LISTEN connections killed, PostgreSQL restart, paused node rejoining, crashed node cleanup, graceful shutdown cleanup |
-| `TestCapacity` | default pools against a 97-connection budget, latency profile, pgx query exec mode cost |
+| `TestCapacity` | default pools against a 97-connection budget, latency profile, pgx query exec mode cost (default `cache_describe` vs `describe_exec` vs `cache_statement`) |
 | `TestPerf` | throughput benchmark, runs only with `PRODTEST_PERF=1` (see below) |
 
 Environment:

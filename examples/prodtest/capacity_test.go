@@ -161,8 +161,8 @@ func TestCapacity(t *testing.T) {
 	})
 
 	t.Run("QueryExecModeCost", func(t *testing.T) {
-		// default_query_exec_mode=describe_exec (fork default) vs pgx's
-		// cache_statement on the same read workload, one node each.
+		// the fork default (cache_describe) vs the describe_exec opt-out and
+		// pgx's cache_statement on the same read workload, one node each.
 		measure := func(prefix string, extraEnv ...string) *loadResult {
 			f := dedicated(t, prefix, 1, extraEnv...)
 			seedPosts(t, f, f.orgA, f.alice.ID, 10_000)
@@ -176,18 +176,27 @@ func TestCapacity(t *testing.T) {
 			})
 		}
 
-		cached := *pg.appURL
-		qs := cached.Query()
-		qs.Set("default_query_exec_mode", "cache_statement")
-		cached.RawQuery = qs.Encode()
+		withMode := func(mode string) string {
+			u := *pg.appURL
+			q := u.Query()
+			q.Set("default_query_exec_mode", mode)
+			u.RawQuery = q.Encode()
+			return "POSTGRES_URL=" + u.String()
+		}
 
-		describe := measure("descexec")
-		cache := measure("cachestmt", "POSTGRES_URL="+cached.String())
-		t.Logf("describe_exec:   %s", describe)
-		t.Logf("cache_statement: %s", cache)
-		if describe.errors > 0 || cache.errors > 0 {
-			t.Errorf("errors: describe_exec %d (%s), cache_statement %d (%s)",
-				describe.errors, describe.sample, cache.errors, cache.sample)
+		results := []struct {
+			mode string
+			res  *loadResult
+		}{
+			{"cache_describe (default)", measure("cachedesc")},
+			{"describe_exec", measure("descexec", withMode("describe_exec"))},
+			{"cache_statement", measure("cachestmt", withMode("cache_statement"))},
+		}
+		for _, r := range results {
+			t.Logf("%-25s %s", r.mode+":", r.res)
+			if r.res.errors > 0 {
+				t.Errorf("errors: %s %d (%s)", r.mode, r.res.errors, r.res.sample)
+			}
 		}
 	})
 }

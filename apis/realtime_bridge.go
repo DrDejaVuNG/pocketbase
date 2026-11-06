@@ -21,7 +21,6 @@ import (
 	"ganigeorgiev.com/pocketbase/pocketbase/tools/subscriptions"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/stdlib"
 )
 
 type IRealtimeBridge interface {
@@ -212,6 +211,7 @@ func (t *RealtimeBridge) listenSharedBridgeChannelLoop(ctx context.Context) {
 			return err
 		}
 
+		core.ResetStatementCaches() // missed collection changes may have changed tables
 		if err := t.app.ReloadCachedCollections(); err != nil {
 			t.app.Logger().Warn("Realtime bridge: failed to reload the cached collections", "error", err)
 		}
@@ -261,6 +261,9 @@ func (t *RealtimeBridge) handleSharedEvent(payload string) {
 		if ev.From == t.channelId {
 			return
 		}
+		// the other instance changed tables that the pooled connections of
+		// this one may have cached statements for
+		core.ResetStatementCaches()
 		if err := t.app.ReloadCachedCollections(); err != nil {
 			t.app.Logger().Warn("Realtime bridge: failed to reload the cached collections", "error", err)
 		}
@@ -948,11 +951,11 @@ func runPgxCommand(ctx context.Context, app core.App, pgxFunc func(*pgx.Conn) er
 	defer sqlConn.Close() // Put back to connection pool
 
 	return sqlConn.Raw(func(driverConn any) error {
-		stdlibConn, ok := driverConn.(*stdlib.Conn)
+		// *stdlib.Conn or the core statement cache wrapper that embeds it
+		pgxDriverConn, ok := driverConn.(interface{ Conn() *pgx.Conn })
 		if !ok {
-			return fmt.Errorf("driverConn is not a *stdlib.Conn instance, are you using the pgx's database/sql driver?")
+			return fmt.Errorf("driverConn %T is not a pgx database/sql connection", driverConn)
 		}
-		pgxConn := stdlibConn.Conn()
-		return pgxFunc(pgxConn)
+		return pgxFunc(pgxDriverConn.Conn())
 	})
 }
