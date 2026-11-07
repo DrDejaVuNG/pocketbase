@@ -30,14 +30,14 @@ See: [pocketbase/pocketbase](https://ganigeorgiev.com/pocketbase/pocketbase) (up
 
 **Use as a Go framework**
 
-Since `v0.41.1-pg` the fork uses the upstream module path `ganigeorgiev.com/pocketbase/pocketbase`. Import `ganigeorgiev.com/pocketbase/pocketbase/...` in your code and replace the module and its `dbx` dependency in your `go.mod`. Go ignores the `replace` lines of dependencies, so your app needs both:
+Since `v0.41.1-pg` the fork uses the upstream module path `ganigeorgiev.com/pocketbase/pocketbase`. Import `ganigeorgiev.com/pocketbase/pocketbase/...` in your code and replace the module and its `dbx` dependency in your `go.mod`. Go ignores the `replace` lines of dependencies, so your app needs both, and the `dbx` version must match the release (copy it from the fork's `go.mod` at that tag):
 
 ```
 require ganigeorgiev.com/pocketbase/pocketbase v0.41.1
 
-replace ganigeorgiev.com/pocketbase/pocketbase => github.com/DrDejaVuNG/pocketbase v0.41.1-pg
+replace ganigeorgiev.com/pocketbase/pocketbase => github.com/DrDejaVuNG/pocketbase v0.41.1-pg.2
 
-replace ganigeorgiev.com/pocketbase/dbx => github.com/DrDejaVuNG/dbx v1.12.1-0.20261105154651-66e6fcf5a301
+replace ganigeorgiev.com/pocketbase/dbx => github.com/DrDejaVuNG/dbx v1.12.1-0.20261107061930-484b76c4dce0
 ```
 
 Upgrade from `v0.40.x-pg`: in your `.go` files change `github.com/pocketbase/pocketbase`, `github.com/pocketbase/dbx`, `github.com/pocketbase/ozzo-validation/v4` and `github.com/pocketbase/tygoja` to `ganigeorgiev.com/pocketbase/...` and `github.com/ganigeorgiev/fexpr` to `ganigeorgiev.com/fexpr`, change the `replace` lines as above, then run `go mod tidy`.
