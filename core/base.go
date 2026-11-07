@@ -102,6 +102,14 @@ type BaseAppConfig struct {
 	//
 	// If not set, it defaults to true when the PB_TX_SERIALIZE env variable is "false".
 	DisableTxSerialization bool
+
+	// PostgreSQL: DisableIdentifierQuoting disables the quoting of the unquoted
+	// mixed-case identifiers and a bare user in the SQL of the data and aux
+	// databases (see dbx.DB.QuoteIdentifiers). The quoting keeps raw SQL
+	// written for SQLite working (dbx.NewExp("userId = {:id}"), raw NewQuery).
+	//
+	// If not set, it defaults to true when the PB_PG_QUOTE_IDENTIFIERS env variable is "false".
+	DisableIdentifierQuoting bool
 }
 
 // ensures that the BaseApp implements the App interface.
@@ -288,6 +296,11 @@ func NewBaseApp(config BaseAppConfig) *BaseApp {
 	if !app.config.DisableTxSerialization {
 		if v, err := strconv.ParseBool(os.Getenv("PB_TX_SERIALIZE")); err == nil && !v {
 			app.config.DisableTxSerialization = true
+		}
+	}
+	if !app.config.DisableIdentifierQuoting {
+		if v, err := strconv.ParseBool(os.Getenv("PB_PG_QUOTE_IDENTIFIERS")); err == nil && !v {
+			app.config.DisableIdentifierQuoting = true
 		}
 	}
 
@@ -1376,6 +1389,8 @@ func (app *BaseApp) initDataDB() error {
 	concurrentDB.DB().SetMaxOpenConns(app.config.DataMaxOpenConns)
 	concurrentDB.DB().SetMaxIdleConns(app.config.DataMaxIdleConns)
 	concurrentDB.DB().SetConnMaxIdleTime(3 * time.Minute)
+	// PostgreSQL: keep the SQLite meaning of unquoted identifiers in raw SQL
+	concurrentDB.QuoteIdentifiers = !app.config.DisableIdentifierQuoting
 
 	/* SQLite:
 	nonconcurrentDB, err := app.config.DBConnect(app.config.PostgresDataDB)
@@ -1465,6 +1480,8 @@ func (app *BaseApp) initAuxDB() error {
 	concurrentDB.DB().SetMaxOpenConns(app.config.AuxMaxOpenConns)
 	concurrentDB.DB().SetMaxIdleConns(app.config.AuxMaxIdleConns)
 	concurrentDB.DB().SetConnMaxIdleTime(3 * time.Minute)
+	// PostgreSQL: keep the SQLite meaning of unquoted identifiers in raw SQL
+	concurrentDB.QuoteIdentifiers = !app.config.DisableIdentifierQuoting
 
 	/* SQLite:
 	nonconcurrentDB, err := app.config.DBConnect(app.config.PostgresAuxDB)

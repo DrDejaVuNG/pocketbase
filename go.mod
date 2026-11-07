@@ -57,4 +57,4 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 )
 
-replace ganigeorgiev.com/pocketbase/dbx => github.com/DrDejaVuNG/dbx v1.12.1-0.20261105154651-66e6fcf5a301
+replace ganigeorgiev.com/pocketbase/dbx => github.com/DrDejaVuNG/dbx v1.12.1-0.20261107061930-484b76c4dce0
