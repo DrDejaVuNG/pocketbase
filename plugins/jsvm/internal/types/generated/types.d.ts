@@ -14077,6 +14077,15 @@ namespace core {
   rules: Array<RateLimitRule>
   excludedIPs: Array<string>
   enabled: boolean
+  /**
+   * PerAuthRecord counts authenticated requests per auth record instead of
+   * per client IP. Guests are always counted per client IP.
+   * 
+   * With per-IP counting, all users behind one shared address (carrier-grade
+   * NAT, an office NAT) share one budget. Off by default (upstream behavior);
+   * omitted from the JSON while off, so the default settings stay unchanged.
+   */
+  perAuthRecord: boolean
  }
  interface RateLimitsConfig {
   /**

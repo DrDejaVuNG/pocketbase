@@ -2,6 +2,7 @@ package apis_test
 
 import (
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"testing/synctest"
@@ -163,6 +164,85 @@ func TestDefaultRateLimitMiddleware(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestDefaultRateLimitMiddlewarePerAuthRecord(t *testing.T) {
+	// every request comes from the same client IP (the httptest default)
+	scenarios := []struct {
+		name          string
+		perAuthRecord bool
+		// "" is a guest, else the email of the "users" auth record
+		requests       []string
+		expectedStatus []int
+	}{
+		{
+			"off: users and guests behind one IP share one budget",
+			false,
+			[]string{"test@example.com", "test2@example.com", ""},
+			[]int{200, 429, 429},
+		},
+		{
+			"on: each auth record has its own budget, guests share the IP budget",
+			true,
+			[]string{"test@example.com", "test@example.com", "test2@example.com", "", ""},
+			[]int{200, 429, 200, 200, 429},
+		},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			app, _ := tests.NewTestApp()
+			defer app.Cleanup()
+
+			app.Settings().RateLimits.Enabled = true
+			app.Settings().RateLimits.PerAuthRecord = s.perAuthRecord
+			app.Settings().RateLimits.Rules = []core.RateLimitRule{
+				{
+					Label:       "/rate/",
+					MaxRequests: 1,
+					Duration:    60,
+				},
+			}
+
+			pbRouter, err := apis.NewRouter(app)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pbRouter.GET("/rate/a", func(e *core.RequestEvent) error {
+				return e.String(200, "a")
+			})
+
+			mux, err := pbRouter.BuildMux()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for i, email := range s.requests {
+				req := httptest.NewRequest(http.MethodGet, "/rate/a", nil)
+
+				if email != "" {
+					auth, err := app.FindAuthRecordByEmail("users", email)
+					if err != nil {
+						t.Fatalf("[%d] %v", i, err)
+					}
+
+					token, err := auth.NewAuthToken()
+					if err != nil {
+						t.Fatalf("[%d] %v", i, err)
+					}
+
+					req.Header.Add("Authorization", token)
+				}
+
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+
+				if status := rec.Result().StatusCode; status != s.expectedStatus[i] {
+					t.Fatalf("[%d %q] Expected response status %d, got %d", i, email, s.expectedStatus[i], status)
+				}
+			}
+		})
+	}
 }
 
 func TestDefaultRateLimitMiddlewareSkipChecks(t *testing.T) {

@@ -35,7 +35,7 @@ Since `v0.41.1-pg` the fork uses the upstream module path `ganigeorgiev.com/pock
 ```
 require ganigeorgiev.com/pocketbase/pocketbase v0.41.1
 
-replace ganigeorgiev.com/pocketbase/pocketbase => github.com/DrDejaVuNG/pocketbase v0.41.1-pg.2
+replace ganigeorgiev.com/pocketbase/pocketbase => github.com/DrDejaVuNG/pocketbase v0.41.1-pg.3
 
 replace ganigeorgiev.com/pocketbase/dbx => github.com/DrDejaVuNG/dbx v1.12.1-0.20261107061930-484b76c4dce0
 ```
@@ -104,6 +104,7 @@ Upgrade from `v0.40.x-pg`: in your `.go` files change `github.com/pocketbase/poc
 - The `update` (self-update) command is not available: the upstream command installs the upstream SQLite release. Deploy a new binary or Docker image instead.
 - Connect to PostgresSQL directly or through a pooler in session mode. Transaction-mode poolers (PgBouncer, RDS Proxy) break the realtime bridge (`LISTEN`) and the migration locks.
 - Rate limits, OTP guess limits and resend throttles are kept per node; with N nodes behind a load balancer the effective limit is N times the configured one.
+- Rate limits count requests per client IP, like upstream. To count authenticated requests per auth record instead (so users behind one shared address, e.g. carrier-grade NAT, don't share a budget), set `app.Settings().RateLimits.PerAuthRecord = true` in Go; the dashboard has no field for it. Guests are always counted per client IP.
 - Realtime bridge messages changed format on 2026-11-04; during a rolling upgrade from an older build, realtime events between old and new nodes are not delivered.
 - Transactions (record deletes, batch requests, `RunInTransaction`) are serialized across all nodes while `PB_TX_SERIALIZE` is on (the default), similar to SQLite's single writer. Keep them short: a 3-node test cluster handled about 250-700 transactions per second in total.
 - Add an index to relation fields that other records reference with cascade delete (or that are unset on delete): each delete looks up the referencing records inside its serialized transaction.

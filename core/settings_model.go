@@ -592,6 +592,14 @@ type RateLimitsConfig struct {
 	Rules       []RateLimitRule `form:"rules" json:"rules"`
 	ExcludedIPs []string        `form:"excludedIPs" json:"excludedIPs"`
 	Enabled     bool            `form:"enabled" json:"enabled"`
+
+	// PerAuthRecord counts authenticated requests per auth record instead of
+	// per client IP. Guests are always counted per client IP.
+	//
+	// With per-IP counting, all users behind one shared address (carrier-grade
+	// NAT, an office NAT) share one budget. Off by default (upstream behavior);
+	// omitted from the JSON while off, so the default settings stay unchanged.
+	PerAuthRecord bool `form:"perAuthRecord" json:"perAuthRecord,omitzero"`
 }
 
 // FindRateLimitRule returns the first matching rule based on the provided labels.

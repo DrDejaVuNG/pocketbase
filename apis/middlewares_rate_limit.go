@@ -175,7 +175,7 @@ func checkRateLimit(e *core.RequestEvent, rtId string, rule core.RateLimitRule) 
 		return nil
 	}
 
-	key := e.RealIP()
+	key := rateLimitClientKey(e)
 	if key == "" {
 		e.App.Logger().Warn("Empty rate limit client key")
 		return nil
@@ -192,6 +192,18 @@ func skipRateLimit(e *core.RequestEvent) bool {
 	return !e.App.Settings().RateLimits.Enabled ||
 		e.HasSuperuserAuth() ||
 		isIPInList(e.App.Settings().RateLimits.ExcludedIPs, e.RealIP())
+}
+
+// rateLimitClientKey returns the key that a request is counted under: its
+// auth record when RateLimits.PerAuthRecord is on and the request is
+// authenticated, else its client IP.
+func rateLimitClientKey(e *core.RequestEvent) string {
+	if e.Auth != nil && e.App.Settings().RateLimits.PerAuthRecord {
+		// the "@" prefix keeps record keys apart from IP keys
+		return "@" + e.Auth.Collection().Id + ":" + e.Auth.Id
+	}
+
+	return e.RealIP()
 }
 
 var defaultAuthAudience = []string{core.RateLimitRuleAudienceAll, core.RateLimitRuleAudienceAuth}
@@ -361,7 +373,12 @@ func (l *rateClient) consume() bool {
 	nowUnix := time.Now().Unix()
 
 	// reset
-	if nowUnix-l.start >= l.interval {
+	//
+	// A window that starts after "now" is also reset: a backward wall-clock
+	// step (e.g. an NTP correction) would otherwise keep it from resetting
+	// until the clock catches up, and an exhausted client would stay limited
+	// for the whole size of the step.
+	if nowUnix < l.start || nowUnix-l.start >= l.interval {
 		l.available = l.maxAllowed
 		l.start = nowUnix
 	}
